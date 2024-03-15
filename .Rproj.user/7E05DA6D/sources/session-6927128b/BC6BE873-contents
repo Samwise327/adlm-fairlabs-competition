@@ -1,0 +1,143 @@
+---
+title: "adlm_competition"
+format: html
+editor: visual
+---
+
+## Setup Parameters
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(janitor)
+library(caret)
+memory.limit(size=5000)   #Memory allocation to 5GB
+library(corrr)
+library(Rtsne)
+```
+
+## Data Cleanup
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+d.in <- read.csv("fairlabs_data.csv")
+
+d.in <- d.in %>%
+  clean_names()
+
+d.in[d.in == ""] <- NA
+
+un_enc <- length(unique(d.in$encounter_id))
+un_mom <- length(unique(d.in$mother_id))
+
+d.in$maternal_race <- as.character(d.in$maternal_race)
+
+d.expl <- d.in %>%
+  separate_rows(maternal_race, sep = "\\s+") %>%
+  mutate(maternal_race = tolower(maternal_race)) %>%
+  mutate(order_indication = ifelse(is.na(order_indication), "no_indication", order_indication))
+
+race_words <- as.data.frame(table(d.expl$maternal_race))
+
+d.expl_nodups <- d.expl[!duplicated(d.expl),]
+
+d.expl_race <- d.expl_nodups %>%
+  mutate(values = 1) %>%
+  pivot_wider(names_from = maternal_race, values_from = values, values_fill = 0)
+
+indications <- as.data.frame(table(d.expl_race$order_indication))
+
+d.expl_race_ind <- d.expl_race %>%
+  mutate(values=1) %>%
+  pivot_wider(names_from = order_indication, values_from = values, values_fill = 0)
+
+d.expl_race_ind <- d.expl_race_ind %>%
+  mutate(uds_order_id = ifelse(!is.na(uds_order_id), 1, 0)) %>%
+  mutate(cps_reporting_date = ifelse(!is.na(cps_reporting_date), 1, 0))
+
+d.moms <- as.data.frame(table(d.expl_race_ind$mother_id))
+colnames(d.moms) <- c("mother_id", "preg_cnt")
+
+d.expl_race_ind_mom <- left_join(d.expl_race_ind, d.moms, by="mother_id")
+
+d.expl_race_ind_mom <- d.expl_race_ind_mom %>%
+  mutate(delivery_date = month(delivery_date)) %>%
+  rename(delivery_month = delivery_date)
+
+d.to_model <- d.expl_race_ind_mom %>%
+  select(-encounter_id, -mother_id, -uds_collection_date, -uds_collection_date) %>%
+  clean_names()
+
+d.to_model[is.na(d.to_model)] <- 0
+
+write.csv(d.to_model, "to_model.csv")
+```
+
+## Correlation analysis
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+d.in <- read.csv("to_model.csv")[,-1]
+d.in <- d.in %>%
+  mutate_all(as.numeric)
+
+d.in.ori <- d.in
+
+# Find near-zero variance predictors
+nzv_cols <- nearZeroVar(d.in, saveMetrics = TRUE) 
+nzv_cols_lst <- nzv_cols$nzv
+
+# Remove the predictors
+d.in <- d.in[, -nzv_cols$nzv] 
+
+# Set a correlation threshold (e.g., 0.9)
+corr_threshold <- 0.4
+
+# Find highly correlated predictors
+high_corr <- findCorrelation(cor(d.in), cutoff = corr_threshold)
+
+# Remove one of each pair of highly correlated predictors
+d.in <- d.in[, -high_corr]
+
+
+
+plot.corr <- d.in %>%
+  correlate() %>%
+  rplot(print_cor=TRUE) +
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+
+plot.corr
+
+d.corr <- d.in %>%
+  correlate() 
+
+##t-SNE
+
+d.in_tsne <- d.in[!duplicated(d.in),]
+
+d.tsne <- Rtsne(d.in_tsne)
+
+d.tsne_df <- d.in_tsne %>%
+  bind_cols(tsne_x=d.tsne$Y[,1], tsne_y=d.tsne$Y[,2])
+
+plot.tsne <- d.tsne_df %>%
+  ggplot(aes(tsne_x, tsne_y))+
+  geom_point(alpha=0.5)
+
+plot.tsne
+
+plot.tsne.age <- d.tsne_df %>%
+  ggplot(aes(tsne_x, tsne_y, color = black))+
+  geom_point(alpha=0.5)
+
+plot.tsne.age
+```

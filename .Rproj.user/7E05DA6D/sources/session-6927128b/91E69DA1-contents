@@ -1,0 +1,730 @@
+---
+title: "AACC hemolysis"
+author: "R.Benirschke"
+format: html
+editor: visual
+---
+
+Read and summarize data by collector
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(janitor)
+library(caret)
+memory.limit(size=5000)   #Memory allocation to 5GB
+
+##read in datasets
+d.hiresults <- read_csv("D:/20230217_aacc_competition/aacc-2023-helpwithhemolysis/hemolysis_index_results.csv")
+
+d.rdcost <- read_csv("D:/20230217_aacc_competition/aacc-2023-helpwithhemolysis/redraw_costs.csv") 
+
+d.thresh <- read_csv("D:/20230217_aacc_competition/aacc-2023-helpwithhemolysis/redraw_thresholds.csv")
+
+d.test <- read_csv("D:/20230217_aacc_competition/aacc-2023-helpwithhemolysis/test.csv")
+d.test <- d.test %>%
+  clean_names()
+
+d.train <- read_csv("D:/20230217_aacc_competition/aacc-2023-helpwithhemolysis/train.csv")
+
+##patient data join
+d.pat.data <- left_join(d.hiresults, d.thresh, by="ORDERABLE")
+d.pat.data <- left_join(d.pat.data, d.rdcost, by="ENCOUNTER_TYPE")
+
+##add rejections and ratio of hemolysis to threshold
+d.pat.feat <- d.pat.data %>%
+  mutate(reject = ifelse(HEMOLYSIS_INDEX > HI_REDRAW_THRESHOLD, 1, 0)) %>%
+  mutate(hi_ratio = HEMOLYSIS_INDEX/HI_REDRAW_THRESHOLD) %>%
+  mutate(overall_cost = ifelse(reject == 1, REDRAW_COST, 0))
+
+##format columns
+d.pat.feat$PATIENT_AGE <- gsub("<", "", d.pat.feat$PATIENT_AGE)
+d.pat.feat$PATIENT_AGE <- gsub(">", "", d.pat.feat$PATIENT_AGE)
+d.pat.feat$PATIENT_AGE <- as.numeric(as.character(d.pat.feat$PATIENT_AGE))
+
+d.pat.feat$COLLECTION_DAY <- as.numeric(as.character(d.pat.feat$COLLECTION_DAY))
+
+d.pat.feat <- d.pat.feat %>%
+  mutate(COLLECTION_TIME_H = substr(COLLECTION_TIME,1,2))
+d.pat.feat$COLLECTION_TIME_H <- as.numeric(as.character(d.pat.feat$COLLECTION_TIME_H))
+
+# ## summarize medians by collector
+# d.pat.meds <- d.pat.feat %>%
+#   group_by(COLLECTOR_ID) %>%
+#   summarise(PATIENT_AGE_M = median(PATIENT_AGE, na.rm=TRUE),
+#             patient_age_iqr = round(IQR(PATIENT_AGE, na.rm=TRUE)),
+#             COLLECTION_DAY_M = median(COLLECTION_DAY),
+#             COLLECTION_TIME_M = median(COLLECTION_TIME_H),
+#             HEMOLYSIS_INDEX_M = median(HEMOLYSIS_INDEX, na.rm=TRUE),
+#             hemolysis_index_iqr = IQR(HEMOLYSIS_INDEX, na.rm=TRUE),
+#             HI_REDRAW_THRESHOLD_M = median(HI_REDRAW_THRESHOLD, na.rm=TRUE),
+#             REDRAW_COST_M = median(REDRAW_COST, na.rm=TRUE),
+#             reject_M = round(median(reject, na.rm=TRUE), digits=2),
+#             hi_ratio_M = round(median(hi_ratio, na.rm=TRUE), digits=2),
+#             hi_ratio_iqr = round(IQR(hi_ratio, na.rm=TRUE), digits=2), 
+#             overall_cost_sum = round(sum(overall_cost, na.rm=TRUE), digits=2),
+#             overall_cost_M = round(mean(overall_cost, na.rm=TRUE), digits=2),
+#             overall_cost_iqr = round(sd(overall_cost, na.rm=TRUE), digits=2))
+# 
+# ## summarize orderable
+# d.pat.order <- d.pat.feat %>%
+#   select(COLLECTOR_ID, ORDERABLE) %>%
+#   group_by(COLLECTOR_ID) %>%
+#   count(ORDERABLE)
+# d.pat.order.w <- pivot_wider(d.pat.order, names_from = ORDERABLE, values_from = n, values_fill = 0)
+# row_sum <- rowSums(d.pat.order.w[,2:116])
+# d.pat.order.w[,2:116] <- round(d.pat.order.w[,2:116]/row_sum, digits=2)
+# d.pat.order.w <- as.data.frame(cbind(d.pat.order.w, row_sum))
+# d.pat.order.w <- d.pat.order.w %>%
+#   rename(order_sum = "...117")
+# 
+# ## summarize gender
+# d.pat.sex <- d.pat.feat %>%
+#   select(COLLECTOR_ID, PATIENT_SEX) %>%
+#   group_by(COLLECTOR_ID) %>%
+#   count(PATIENT_SEX)
+# d.pat.sex.w <- pivot_wider(d.pat.sex, names_from = PATIENT_SEX, values_from = n, values_fill = 0)
+# row_sum_sex <- rowSums(d.pat.sex.w[,2:4])
+# d.pat.sex.w[,2:4] <- round(d.pat.sex.w[,2:4]/row_sum_sex, digits=2)
+# 
+# ##summarize race
+# d.pat.race <- d.pat.feat %>%
+#   select(COLLECTOR_ID, PATIENT_RACE) %>%
+#   group_by(COLLECTOR_ID) %>%
+#   count(PATIENT_RACE)
+# d.pat.race.w <- pivot_wider(d.pat.race, names_from = PATIENT_RACE, values_from = n, values_fill = 0)
+# row_sum_race <- rowSums(d.pat.race.w[,2:12])
+# d.pat.race.w[,2:12] <- round(d.pat.race.w[,2:12]/row_sum_race, digits=2)
+# 
+# ##summarize nursing unit
+# d.pat.nu <- d.pat.feat %>%
+#   select(COLLECTOR_ID, NURSING_UNIT) %>%
+#   group_by(COLLECTOR_ID) %>%
+#   count(NURSING_UNIT)
+# d.pat.nu.w <- pivot_wider(d.pat.nu, names_from = NURSING_UNIT, values_from = n, values_fill = 0)
+# row_sum_nu <- rowSums(d.pat.nu.w[,2:60])
+# d.pat.nu.w[,2:60] <- round(d.pat.nu.w[,2:60]/row_sum_nu, digits=2)
+# 
+# # d.nu.sig <- left_join(d.pat.nu.w, d.train, by="COLLECTOR_ID")
+# # d.nu.sig <- as.data.frame(d.nu.sig[complete.cases(d.nu.sig),])
+# # d.nu.sig.noc <- d.nu.sig %>%
+# #   select(-COLLECTOR_ID, -SPLIT)
+# # 
+# # lr.nu <- lm(RELEVANCE ~ ., d.nu.sig.noc)
+# # summary(lr.nu)
+# 
+# ##summarize encounter
+# d.pat.et <- d.pat.feat %>%
+#   select(COLLECTOR_ID, ENCOUNTER_TYPE) %>%
+#   group_by(COLLECTOR_ID) %>%
+#   count(ENCOUNTER_TYPE)
+# d.pat.et.w <- pivot_wider(d.pat.et, names_from = ENCOUNTER_TYPE, values_from = n, values_fill = 0)
+# row_sum_et <- rowSums(d.pat.et.w[,2:5])
+# d.pat.et.w[,2:5] <- round(d.pat.et.w[,2:5]/row_sum_et, digits=2)
+# 
+# ##summarize service
+# d.pat.serv <- d.pat.feat %>%
+#   select(COLLECTOR_ID, MEDICAL_SERVICE) %>%
+#   group_by(COLLECTOR_ID) %>%
+#   count(MEDICAL_SERVICE)
+# d.pat.serv.w <- pivot_wider(d.pat.serv, names_from = MEDICAL_SERVICE, values_from = n, values_fill = 0)
+# row_sum_serv <- rowSums(d.pat.serv.w[,2:26])
+# d.pat.serv.w[,2:26] <- round(d.pat.serv.w[,2:26]/row_sum_et, digits=2)
+# 
+# ##summarize sample
+# d.pat.sp <- d.pat.feat %>%
+#   select(COLLECTOR_ID, SPECIMEN_TYPE) %>%
+#   group_by(COLLECTOR_ID) %>%
+#   count(SPECIMEN_TYPE)
+# d.pat.sp.w <- pivot_wider(d.pat.sp, names_from = SPECIMEN_TYPE, values_from = n, values_fill = 0)
+# row_sum_sp <- rowSums(d.pat.sp.w[,2:4])
+# d.pat.sp.w[,2:4] <- round(d.pat.sp.w[,2:4]/row_sum_sp, digits=2)
+# 
+# ##collect all summary data
+# d.coll_sum <- left_join(d.pat.meds, d.pat.order.w, by="COLLECTOR_ID")
+# d.coll_sum <- left_join(d.coll_sum, d.pat.sex.w, by="COLLECTOR_ID")
+# d.coll_sum <- left_join(d.coll_sum, d.pat.race.w, by="COLLECTOR_ID")
+# d.coll_sum <- left_join(d.coll_sum, d.pat.nu.w, by="COLLECTOR_ID")
+# d.coll_sum <- left_join(d.coll_sum, d.pat.et.w, by="COLLECTOR_ID")
+# d.coll_sum <- left_join(d.coll_sum, d.pat.serv.w, by="COLLECTOR_ID")
+# d.coll_sum <- left_join(d.coll_sum, d.pat.sp.w, by="COLLECTOR_ID")
+# 
+# ##sum percent of tests with h-index of 100
+# d.100_tests <- d.thresh %>%
+#   filter(HI_REDRAW_THRESHOLD <= 100) 
+# l100_tests <- d.100_tests$ORDERABLE
+# 
+# l100_tests <- l100_tests[l100_tests %in% colnames(d.coll_sum)]
+# 
+# d.coll_sum.100 <- d.coll_sum %>%
+#   mutate(sum100 = rowSums(across(l100_tests)))
+# 
+# ##sum percent of tests with h-index of 250
+# d.250_tests <- d.thresh %>%
+#   filter(HI_REDRAW_THRESHOLD <= 250) 
+# l250_tests <- d.250_tests$ORDERABLE
+# 
+# l250_tests <- l250_tests[l250_tests %in% colnames(d.coll_sum)]
+# 
+# d.coll_sum.250 <- d.coll_sum.100 %>%
+#   mutate(sum250 = rowSums(across(l250_tests)))
+# 
+# ##sum percent of tests with h-index of 300
+# d.300_tests <- d.thresh %>%
+#   filter(HI_REDRAW_THRESHOLD <= 300) 
+# l300_tests <- d.300_tests$ORDERABLE
+# 
+# l300_tests <- l300_tests[l300_tests %in% colnames(d.coll_sum)]
+# 
+# d.coll_sum.300 <- d.coll_sum.250 %>%
+#   mutate(sum300 = rowSums(across(l300_tests)))
+# 
+# ##sum percent of tests with h-index of 500
+# d.500_tests <- d.thresh %>%
+#   filter(HI_REDRAW_THRESHOLD <= 500) 
+# l500_tests <- d.500_tests$ORDERABLE
+# 
+# l500_tests <- l500_tests[l500_tests %in% colnames(d.coll_sum)]
+# 
+# d.coll_sum.500 <- d.coll_sum.300 %>%
+#   mutate(sum500 = rowSums(across(l500_tests)))
+# 
+# ##clean up names and other stuff
+# d.train <- d.train %>%
+#   clean_names()
+# 
+# d.sum.clean <- d.coll_sum.500 %>%
+#   clean_names() %>%
+#   remove_empty() %>%
+#   remove_constant()
+# 
+# d.sum.clean.sig <- d.sum.clean[,-nearZeroVar(d.sum.clean)]
+# 
+# d.train.all <- left_join(d.train, d.sum.clean.sig, by="collector_id")
+# d.train.all <- d.train.all %>%
+#   arrange(desc(relevance))
+# d.train.all.wght <- d.train.all %>%
+#   mutate(wght = round(relevance/4, digits=0)) %>%
+#   mutate(wght = ifelse(wght <= 1, 1, wght))
+# write.csv(d.train.all, "train_sum_500.csv")
+# write.csv(d.train.all.wght, "train_sum_500_wght.csv")
+# 
+# d.test.all <- left_join(d.test, d.sum.clean.sig, by="collector_id")
+# write.csv(d.test.all, "test_sum_500.csv")
+# 
+# ##set up categorical
+# ##select cutoff based on number in validations set
+# total_val <- 2*nrow(d.test.all)
+# perc_top <- round(50/total_val, digits=2)
+# 
+# top_res <- round(nrow(d.train.all)*perc_top, digits=0)
+# 
+# d.train.cat <- d.train.all %>%
+#   mutate(to_train = ifelse(relevance >= d.train.all$relevance[81], 1, 0)) %>%
+#   select(-relevance)
+# 
+# write.csv(d.train.cat, "train_cat.csv")
+
+```
+
+top result sorted by overall_cost_iqr
+
+EDA
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(janitor)
+library(corrplot)
+library(caret)
+memory.limit(size=5000)   #Memory allocation to 5GB
+
+d.in <- read_csv("train_sum_500.csv")[,-1]
+d.in <- d.in %>%
+  select(-split, -collector_id)
+
+preProcValues <- preProcess(d.in %>%
+                              select(-relevance), method = c("scale"))
+d.in.imp <- predict(preProcValues, d.in)
+
+c.in <- cor(d.in, use="pairwise.complete.obs")
+write.csv(c.in, "correlation.csv")
+d.c.in <- as.data.frame(c.in)
+
+png("corr_plot.png")
+corr_plot <- corrplot(c.in, sig.level = 0.02)
+dev.off
+
+```
+
+step by step models
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(janitor)
+library(corrplot)
+library(caret)
+memory.limit(size=5000)   #Memory allocation to 5GB
+
+set.seed(261807)
+
+d.in <- read_csv("train_sum_500.csv")[,-1]
+
+d.submission <- read_csv("test_sum_500.csv")[,-1]
+
+d.corr <- read_csv("correlation.csv")
+d.corr <- d.corr %>%
+  mutate(relevance = abs(relevance)) %>%
+  arrange(desc(relevance)) %>%
+  filter(relevance > 0.05) 
+
+corr <- d.corr$`...1`[2:nrow(d.corr)]
+
+d.in <- d.in %>%
+  select(relevance, split, collector_id, corr)
+
+train_index <- createDataPartition(d.in$relevance, p = 0.75,
+                                   list = FALSE)
+##split model set into train and test
+d.train <- d.in[train_index,]
+d.train<- d.train %>% 
+  select(-split, -collector_id)
+d.test <- d.in[-train_index,]
+d.test_key <- d.test %>%
+  select(split, collector_id)
+d.test <- d.test %>%
+  select(-split, -collector_id)
+
+##count of complete
+train_comp <- nrow(d.train[complete.cases(d.train),])
+test_comp <- nrow(d.test[complete.cases(d.test),])
+
+##impute missing
+preProcValues <- preProcess(d.train %>%
+                              select(-relevance), method = c("medianImpute"))
+d.train.imp <- predict(preProcValues, d.train)
+d.test.imp <- predict(preProcValues, d.test)
+
+train_comp.imp <- nrow(d.train.imp[complete.cases(d.train.imp),])
+test_comp.imp <- nrow(d.test.imp[complete.cases(d.test.imp),])
+
+##linear model
+m.lr <- lm(relevance ~ ., d.train.imp)
+summary(m.lr)
+
+pred.lr <- predict(m.lr,d.test.imp)
+pred.lr <- as.data.frame(cbind(pred.lr, d.test.imp$relevance))
+
+##making a filtering model
+d.hem <- d.submission %>%
+  arrange(desc(hemolysis_index_m))
+d.hem <- d.hem[1:12,]
+
+d.costiqr <- d.submission %>%
+  arrange(desc(overall_cost_iqr))
+d.costiqr <- d.costiqr[1:12,]
+
+d.hirat <- d.submission %>%
+  arrange(desc(hi_ratio_m))
+d.hirat <- d.hirat[1:12,]
+
+d.rest <- d.submission %>%
+  arrange(desc(overall_cost_sum))
+
+d.all <- rbind(d.hem, d.costiqr, d.hirat, d.rest)
+
+d.to_sub <- d.all[!duplicated(d.all),]
+
+d.to_sub <- d.to_sub %>%
+  select(split, collector_id)
+
+colnames(d.to_sub) <- c("SPLIT","COLLECTOR_ID")
+
+write.csv(d.to_sub, "logic_model.csv", row.names = FALSE)
+
+# ##log regression
+# m.lgr <- glm(to_train ~ ., d.train.imp, family=binomial)
+# summary(m.lgr)
+# 
+# pred.lgr <- predict(m.lgr,d.test.imp, type="response")
+# pred.glr <- as.data.frame(cbind(pred.lgr, d.test.imp$to_train))
+
+```
+
+Median rank
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(corrplot)
+
+set.seed(718252627)
+
+##read in datasets
+d.model <- read_csv("train_sum.csv")[,-1]
+d.model$idx <- as.numeric(1:length(d.model$split))
+d.model.lr <- d.model %>%
+  select(-split, -collector_id, -idx)
+
+d.validation <- read_csv("test_sum.csv")[,-1]
+
+##lr
+lr.model <- lm(relevance ~ ., d.model.lr)
+summary(lr.model)
+
+pred.lr <- predict(lr.model, d.validation)
+pred.lr <- as.data.frame(cbind(d.validation$split, d.validation$collector_id, pred.lr))
+pred.lr <- pred.lr %>%
+  arrange(desc(pred.lr))
+d.lr.sub <- pred.lr %>%
+  select(-pred.lr)
+
+colnames(d.lr.sub) <- c("SPLIT","COLLECTOR_ID")
+write.csv(d.lr.sub, "val_lr.csv", row.names = FALSE)
+
+##ranking by relevance
+d.model.rel <- d.model %>%
+  arrange(desc(relevance))
+write.csv(d.model.rel, "train_rel.csv", row.names = FALSE)
+
+##ranking by hemolysis median
+d.model.med <- d.model %>%
+  arrange(desc(hemolysis_index_m))
+
+d.med <- d.validation %>%
+  arrange(desc(hemolysis_index_m))%>%
+  select(split, collector_id)
+
+colnames(d.med) <- c("SPLIT","COLLECTOR_ID")
+write.csv(d.model.med, "train_med.csv", row.names = FALSE)
+write.csv(d.med, "val_med.csv", row.names = FALSE)
+
+##ranking by ratio
+d.model.ratio <- d.model %>%
+  arrange(desc(hi_ratio_m))
+
+d.ratio <- d.validation %>%
+  arrange(desc(hi_ratio_m))%>%
+  select(split, collector_id)
+
+colnames(d.ratio) <- c("SPLIT","COLLECTOR_ID")
+write.csv(d.model.ratio, "train_ratio.csv", row.names = FALSE)
+write.csv(d.ratio, "val_ratio.csv", row.names = FALSE)
+
+```
+
+Create initial model
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(janitor)
+library(h2o)
+library(caret)
+#library(xgboost)
+library(caretEnsemble)
+library(farr)
+memory.limit(size=5000)   #Memory allocation to 5GB
+
+set.seed(71826)
+
+##read in datasets
+d.model <- read_csv("train_sum_500.csv")[,-1]
+d.corr <- read_csv("correlation.csv")
+d.corr <- d.corr %>%
+  rename("var" = `...1`) %>%
+  mutate(relevance = abs(relevance)) %>%
+  arrange(desc(relevance)) 
+d.corr <- d.corr %>%
+  filter(relevance < 1 & relevance >= 0.2)
+corr <- d.corr$var
+
+d.model <- d.model %>%
+  select(corr, relevance, split, collector_id)
+d.model$relevance <- as.numeric(as.character(d.model$relevance))
+d.model$relevance <- round(d.model$relevance, digits=2)
+
+d.validation <- read_csv("test_sum_500.csv")[,-1]
+
+train_index <- createDataPartition(d.model$relevance, p = 0.75,
+                                   list = FALSE)
+##split model set into train and test
+d.train <- d.model[train_index,]
+d.train<- d.train %>% 
+  select(-split, -collector_id)
+d.test <- d.model[-train_index,]
+d.test_key <- d.test %>%
+  select(split, collector_id)
+d.test <- d.test %>%
+  select(-split, -collector_id)
+
+##count of complete
+train_comp <- nrow(d.train[complete.cases(d.train),])
+test_comp <- nrow(d.test[complete.cases(d.test),])
+
+##impute missing
+preProcValues <- preProcess(d.train %>%
+                              select(-relevance), method = c("medianImpute"))
+d.train.imp <- predict(preProcValues, d.train)
+d.test.imp <- predict(preProcValues, d.test)
+
+
+##intialize and setup h2o
+invisible(h2o.init())
+
+train_h = as.h2o(d.train.imp)
+test_h = as.h2o(d.test.imp)
+
+
+y <- "relevance"
+pred = setdiff(names(d.train.imp %>% select(-relevance)), y)
+
+##create model
+aml = h2o.automl(x = pred, y = y,
+                  training_frame = train_h,
+                  seed = 71826,
+                 max_runtime_secs = 300
+                 )
+
+# AutoML Leaderboard
+lb <- h2o.get_leaderboard(object = aml, extra_columns = "ALL")
+lb2 <- as.data.frame(lb)
+write.csv(lb2, "leaderboard_pt1_relgt0.csv")
+
+# predict result on test data
+ 
+d.test_key$idx <- 1:length(d.test_key$collector_id)
+write.csv(d.test_key, "test_key.csv")
+d.pred <- as.data.frame(cbind(d.test_key$collector_id,d.test.imp$relevance, prediction$predict))
+d.pred <- d.pred %>%
+  arrange(desc(V3))
+d.pred$idx <- 1:length(d.pred$V1)
+d.pred <- d.pred %>%
+  arrange(desc(V2))
+write.csv(d.pred, "test_pred.csv")
+
+d.pred$V2 <- as.numeric(d.pred$V2)
+d.pred$V3 <- as.numeric(d.pred$V3)
+
+
+pred_plot <- ggplot(d.pred, aes(x=V2, y=V3)) +
+  geom_point()
+pred_plot
+
+##save model and print summary stats
+model_top <- aml@leader
+model_top_save <- h2o.saveModel(object = aml@leader, path = getwd())
+varImp_na <- h2o.varimp(model_top)
+summary(model_top)
+model_sum <- h2o.explain(aml, test_h)
+
+#model_sum
+
+##prediction on submission data
+submit_h <- as.h2o(d.validation)
+prediction_submit <- h2o.predict(aml@leader, submit_h) %>%
+                         as.data.frame()
+
+d.submission <- d.validation %>%
+  select(split, collector_id)
+
+d.submission <- as.data.frame(cbind(d.submission, prediction_submit))
+d.submission <- d.submission %>%
+  arrange(desc(predict)) %>%
+  select(-predict)
+
+colnames(d.submission) <- c("SPLIT","COLLECTOR_ID")
+write.csv(d.submission, "pt1gt0_model.csv", row.names = FALSE)
+```
+
+Create categorial method
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(janitor)
+library(h2o)
+library(caret)
+memory.limit(size=5000)   #Memory allocation to 5GB
+
+set.seed(718252627)
+
+##read in datasets
+d.model <- read_csv("train_sum.csv")[,-1]
+d.model$relevance <- round(d.model$relevance, digits=1)
+d.model <- d.model %>%
+  arrange(desc(relevance))
+d.model$idx <- 1:length(d.model$split)
+d.model <- d.model %>%
+  mutate(targ = ifelse(idx < 50, 2, 1)) %>%
+  select(-relevance, -idx)
+
+d.validation <- read_csv("test_sum.csv")[,-1]
+
+train_index <- createDataPartition(d.model$targ, p = 0.75,
+                                   list = FALSE)
+##split model set into train and test
+d.train <- d.model[train_index,]
+d.train<- d.train %>% 
+  select(-split, -collector_id)
+d.test <- d.model[-train_index,]
+d.test_key <- d.test %>%
+  select(split, collector_id)
+d.test <- d.test %>%
+  select(-split, -collector_id)
+
+##count of complete
+train_comp <- nrow(d.train[complete.cases(d.train),])
+test_comp <- nrow(d.test[complete.cases(d.test),])
+
+##impute missing
+preProcValues <- preProcess(d.train %>%
+                              select(-targ), method = c("medianImpute", "center","scale"))
+d.train.imp <- predict(preProcValues, d.train)
+d.train.imp$targ <- as.factor(d.train.imp$targ)
+d.test.imp <- predict(preProcValues, d.test)
+
+##intialize and setup h2o
+invisible(h2o.init())
+
+train_h = as.h2o(d.train.imp)
+test_h = as.h2o(d.test.imp)
+
+y <- "targ"
+pred = setdiff(names(d.train.imp %>% select(-targ)), y)
+
+##create model
+aml = h2o.automl(x = pred, y = y,
+                  training_frame = train_h,
+                  seed = 718252627,
+                 max_models = 10,
+                 exclude_algos = "StackedEnsemble", 
+                 stopping_metric = "AUCPR"
+                 )
+
+# AutoML Leaderboard
+lb <- h2o.get_leaderboard(object = aml, extra_columns = "ALL")
+lb2 <- as.data.frame(lb)
+write.csv(lb2, "leaderboard.csv")
+
+# predict result on test data
+prediction = h2o.predict(aml@leader, test_h) %>%
+                         as.data.frame()
+d.pred <- as.data.frame(cbind(d.test.imp$targ, prediction$predict))
+
+pred_plot <- ggplot(d.pred, aes(x=V1, y=V2)) +
+  geom_point()
+pred_plot
+
+##save model and print summary stats
+model_top <- aml@leader
+model_top_save <- h2o.saveModel(object = aml@leader, path = getwd())
+varImp_na <- h2o.varimp(model_top)
+summary(model_top)
+model_sum <- h2o.explain(aml, test_h)
+
+##prediction on submission data
+submit_h <- as.h2o(d.validation)
+prediction_submit <- h2o.predict(aml@leader, submit_h) %>%
+                         as.data.frame()
+
+d.submission <- d.validation %>%
+  select(split, collector_id)
+
+d.submission <- as.data.frame(cbind(d.submission, prediction_submit))
+d.submission <- d.submission %>%
+  arrange(desc(p2)) %>%
+  select(-p1)
+
+colnames(d.submission) <- c("SPLIT","COLLECTOR_ID")
+write.csv(d.submission, "cat_model.csv", row.names = FALSE)
+```
+
+Reccomender system approach
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(janitor)
+library(caret)
+library(recommenderlab)
+memory.limit(size=5000)   #Memory allocation to 5GB
+
+set.seed(718252627)
+
+##example datasets
+# 
+# data("MovieLense")
+# 
+# MovieLense100 <- MovieLense[rowCounts(MovieLense) > 100, ]
+# MovieLense100
+# 
+# d.movie <- as.matrix(MovieLense100@data)
+
+# ##read in datasets
+d.model <- read_csv("train_sum.csv")[,-1]
+d.model <- d.model %>%
+  arrange(desc(relevance))
+
+d.validation <- read_csv("test_sum.csv")[,-1]
+
+train_index <- createDataPartition(d.model$relevance, p = 0.75,
+                                   list = FALSE)
+##split model set into train and test
+d.train <- d.model[train_index,]
+d.train<- d.train %>%
+  select(-split, -collector_id)
+d.test <- d.model[-train_index,]
+d.test_key <- d.test %>%
+  select(split, collector_id, relevance)
+d.test <- d.test %>%
+  select(-split, -collector_id)
+
+m.train <- as.matrix(d.train)
+r.train <- as(m.train, "realRatingMatrix")
+r.train <- normalize(r.train)
+
+m.test <- as.matrix(d.test)
+r.test <- as(m.test, "realRatingMatrix")
+r.test <- normalize(r.test)
+
+## recommender system
+rec <- Recommender(r.train, method = "UBCF", param=list(method="Cosine",nn=10))
+
+Top_50_pred <- predict(rec, r.test, n=5)
+Top_50_List = as(Top_50_pred, "list")
+```
