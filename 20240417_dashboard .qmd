@@ -25,6 +25,7 @@ library(nnet)
 library(shinydashboard)
 library(shinythemes)
 
+
 # Read in data in appropriate formats 
 # The first test w an indication is 2028-02-27 & delivery 2-26 = intervention date
 fairlabs_data <- read_csv("fairlabs_data.csv") %>%
@@ -162,7 +163,131 @@ month_count_combined <- rbind(month_count_combined, month_count_overall) %>%
 month_count_combined <- replace(month_count_combined,is.na(month_count_combined),0)
 ```
 
-## ML BEFORE / AFTER INTERVENTION - fix this section
+## NEW !!! glm code generalizable
+
+```{r}
+
+race_pct <- fairlabs_data %>%
+  group_by(BA_intervention, maternal_race) %>%
+  summarize(cnt = n(), pct = cnt/length(fairlabs_data$encounter_id)*100)
+
+race_pct <- race_pct %>%
+  mutate(maternal_race = case_when(
+  maternal_race == "American Indian or Alaska Native" ~ "native_yn",
+  maternal_race == "Asian" ~ "asian_yn",
+  maternal_race == "Black or African American" ~ "black_yn",
+  maternal_race == "Multiracial/Other" ~ "other_yn",
+  maternal_race == "Not Indicated" ~ "ni_yn",
+  maternal_race == "Other Pacific Islander" ~ "pi_yn",
+  maternal_race == "White" ~ "white_yn",
+  TRUE ~ maternal_race))
+
+race_pct_tested <- fairlabs_data_tested %>%
+  group_by(BA_intervention, maternal_race) %>%
+  summarize(cnt = n(), pct = cnt/length(fairlabs_data_tested$encounter_id)*100)
+
+race_pct_tested <- race_pct_tested %>%
+  mutate(maternal_race = case_when(
+  maternal_race == "American Indian or Alaska Native" ~ "native_yn",
+  maternal_race == "Asian" ~ "asian_yn",
+  maternal_race == "Black or African American" ~ "black_yn",
+  maternal_race == "Multiracial/Other" ~ "other_yn",
+  maternal_race == "Not Indicated" ~ "ni_yn",
+  maternal_race == "Other Pacific Islander" ~ "pi_yn",
+  maternal_race == "White" ~ "white_yn",
+  TRUE ~ maternal_race))
+
+
+#######################
+      #tested
+#######################
+#selected_races_before <- subset(race_pct, pct > 1 & BA_intervention == "Before")$maternal_race
+selected_races_before <- subset(race_pct, cnt > 10 & BA_intervention == "Before")$maternal_race
+formula_str <- paste("tested ~ maternal_age +", paste(selected_races_before, collapse = " + "))
+m.glm_tested_before <- glm(formula_str, data=fairlabs_data_before, na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_before)
+
+#selected_races_after <- subset(race_pct, pct > 1 & BA_intervention == "After")$maternal_race
+selected_races_after <- subset(race_pct, cnt > 10 & BA_intervention == "After")$maternal_race
+formula_str <- paste("tested ~ maternal_age +", paste(selected_races_after, collapse = " + "))
+m.glm_tested_after <- glm(formula_str, data=fairlabs_data_after, na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_after)
+
+
+#######################
+        #pos
+#######################
+#selected_races_before <- subset(race_pct_tested, pct > 1 & BA_intervention == "Before")$maternal_race
+selected_races_before <- subset(race_pct_tested, cnt > 10 & BA_intervention == "Before")$maternal_race
+formula_str <- paste("tested_pos ~ maternal_age +", paste(selected_races_before, collapse = " + "))
+m.glm_tested_pos_before <- glm(formula_str, data=fairlabs_data_tested_before, na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_before)
+
+
+selected_races_after <- subset(race_pct_tested, cnt > 10 & BA_intervention == "After")$maternal_race
+formula_str <- paste("tested_pos ~ maternal_age +", paste(selected_races_after, collapse = " + "))
+m.glm_tested_pos_after <- glm(formula_str, data=fairlabs_data_tested_after, na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_after)
+
+
+#######################
+#pos w/o mj
+#######################
+selected_races_before <- subset(race_pct_tested, cnt > 10 & BA_intervention == "Before")$maternal_race
+formula_str <- paste("tested_pos_wo_mj ~ maternal_age +", paste(selected_races_before, collapse = " + "))
+m.glm_tested_pos_wo_mj_before <- glm(formula_str, data=fairlabs_data_tested_before, na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_wo_mj_before)
+
+selected_races_after <- subset(race_pct_tested, cnt > 10 & BA_intervention == "After")$maternal_race
+formula_str <- paste("tested_pos_wo_mj ~ maternal_age +", paste(selected_races_after, collapse = " + "))
+m.glm_tested_pos_wo_mj_after <- glm(formula_str, data=fairlabs_data_tested_after, na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_wo_mj_after)
+
+
+#######################
+#reported + tested
+#######################
+selected_races_before <- subset(race_pct_tested, cnt > 10 & BA_intervention == "Before")$maternal_race
+formula_str <- paste("reported ~ maternal_age +", paste(selected_races_before, collapse = " + "))
+m.glm_reported_before <- glm(formula_str, data=fairlabs_data_tested_before, na.action = "na.exclude", family = binomial)
+summary(m.glm_reported_before)
+
+selected_races_after <- subset(race_pct_tested, cnt > 10 & BA_intervention == "After")$maternal_race
+formula_str <- paste("reported ~ maternal_age +", paste(selected_races_after, collapse = " + "))
+m.glm_reported_after <- glm(formula_str, data=fairlabs_data_tested_after, na.action = "na.exclude", family = binomial)
+summary(m.glm_reported_after)
+
+
+#######################
+#reported + pos
+#######################
+selected_races_before <- subset(race_pct_tested, cnt > 10 & BA_intervention == "Before")$maternal_race
+formula_str <- paste("cps_w_pos ~ maternal_age +", paste(selected_races_before, collapse = " + "))
+m.glm_cps_w_pos_before <- glm(formula_str, data=fairlabs_data_tested_before, na.action = "na.exclude", family = binomial)
+summary(m.glm_cps_w_pos_before)
+
+selected_races_after <- subset(race_pct_tested, cnt > 10 & BA_intervention == "After")$maternal_race
+formula_str <- paste("cps_w_pos ~ maternal_age +", paste(selected_races_after, collapse = " + "))
+m.glm_cps_w_pos_after <- glm(formula_str, data=fairlabs_data_tested_after, na.action = "na.exclude", family = binomial)
+summary(m.glm_cps_w_pos_after)
+
+
+#######################
+#reported + pos_wo_mj
+#######################
+selected_races_before <- subset(race_pct_tested, cnt > 10 & BA_intervention == "Before")$maternal_race
+formula_str <- paste("cps_w_pos_wo_mj ~ maternal_age +", paste(selected_races_before, collapse = " + "))
+m.glm_cps_w_pos_wo_mj_before <- glm(formula_str, data=fairlabs_data_tested_before, na.action = "na.exclude", family = binomial)
+summary(m.glm_cps_w_pos_wo_mj_before)
+
+selected_races_after <- subset(race_pct_tested, cnt > 10 & BA_intervention == "After")$maternal_race
+formula_str <- paste("cps_w_pos_wo_mj ~ maternal_age +", paste(selected_races_after, collapse = " + "))
+m.glm_cps_w_pos_wo_mj_after <- glm(formula_str, data=fairlabs_data_tested_after, na.action = "na.exclude", family = binomial)
+summary(m.glmcps_w_pos_wo_mj_after)
+
+```
+
+## ML BEFORE / AFTER INTERVENTION - (original) not working depending on order?
 
 ```{r}
 
@@ -176,10 +301,10 @@ month_count_combined <- replace(month_count_combined,is.na(month_count_combined)
 #######################
 
 #only between 0-1 as factor (glm is categorical?)
-m.glm_tested_before <- glm(tested ~ maternal_age + black_yn + white_yn, data=fairlabs_data_before, na.action = "na.exclude", family = binomial)
+m.glm_tested_before <- glm(tested ~ maternal_age + white_yn + black_yn + asian_yn + pi_yn + native_yn + ni_yn + other_yn, data=fairlabs_data_before, na.action = "na.exclude", family = binomial, control = list(maxit = 200))
 summary(m.glm_tested_before)
 
-m.glm_tested_after <- glm(tested ~ maternal_age + black_yn + white_yn + asian_yn + pi_yn + native_yn + ni_yn + other_yn, data=fairlabs_data_after, na.action = "na.exclude", family = binomial)
+m.glm_tested_after <- glm(tested ~ maternal_age + black_yn + white_yn + asian_yn + pi_yn + native_yn + other_yn + ni_yn, data=fairlabs_data_after, na.action = "na.exclude", family = binomial)
 summary(m.glm_tested_after)
 
 
@@ -210,7 +335,7 @@ a<- fairlabs_data_tested_after %>%
         #pos w/o mj 
 #######################
 
-m.glm_pos_wo_mj_before <- glm(tested_pos_wo_mj ~ maternal_age + black_yn + white_yn + asian_yn + pi_yn + native_yn + ni_yn, data= fairlabs_data_tested_before, na.action = "na.exclude", family = binomial)
+m.glm_pos_wo_mj_before <- glm(tested_pos_wo_mj ~ maternal_age + black_yn + white_yn + asian_yn + pi_yn + ni_yn + native_yn, data= fairlabs_data_tested_before, na.action = "na.exclude", family = binomial)
 summary(m.glm_pos_wo_mj_before)
 
 m.glm_pos_wo_mj_after <- glm(tested_pos_wo_mj ~ maternal_age + black_yn + white_yn + pi_yn + native_yn + other_yn, data= fairlabs_data_tested_after, na.action = "na.exclude", family = binomial)
@@ -286,7 +411,7 @@ summary(m.mlm_indication)
 
 ```
 
-## Build ML Coef Tables (BEFORE / AFTER) - clean this section?
+## Build ML Coef Tables from models above (BEFORE / AFTER) 
 
 ```{r}
 
@@ -299,9 +424,9 @@ coef_table_before <- data.frame("term" = c("maternal_age", "black_yn1",
                                    "white_yn1", "asian_yn1", "pi_yn1",
                                    "native_yn1","other_yn1", "ni_yn1"))
 
-x_vars <- c("m.glm_tested_before", "m.glm_pos_before", "m.glm_pos_wo_mj_before", 
-            "m.glm_reported_before", "m.glm_reported_pos_before", 
-            "m.glm_reported_pos_wo_mj_before")
+x_vars <- c("m.glm_tested_before", "m.glm_tested_pos_before", 
+            "m.glm_tested_pos_wo_mj_before", "m.glm_reported_before", 
+            "m.glm_cps_w_pos_before", "m.glm_cps_w_pos_wo_mj_before")
 
 for (x_var in x_vars) {
   coef_data <- as.data.table(tidy(get(x_var))) %>%
@@ -325,9 +450,9 @@ coef_table_before <- coef_table_before %>%
   mutate(term = ifelse(term == "ni_yn1", "Not Indicated", term)) %>%
   mutate(term = ifelse(term == "white_yn1", "White", term)) %>%
   mutate(term = ifelse(term == "maternal_age", "Maternal Age", term)) %>%
-  setnames(c("term", "m.glm_tested_before", "m.glm_pos_before", 
-             "m.glm_pos_wo_mj_before", "m.glm_reported_before", 
-             "m.glm_reported_pos_before", "m.glm_reported_pos_wo_mj_before"), 
+  setnames(c("term", "m.glm_tested_before", "m.glm_tested_pos_before", 
+            "m.glm_tested_pos_wo_mj_before", "m.glm_reported_before", 
+            "m.glm_cps_w_pos_before", "m.glm_cps_w_pos_wo_mj_before"), 
            c("Features", "Tested", "Positive Result", 
              "Positive Result (excluding marijuana)", "Reported to CPS", 
              "Reported to CPS with Positive Result", 
@@ -345,9 +470,9 @@ coef_table_after <- data.frame("term" = c("maternal_age", "black_yn1",
                                    "white_yn1", "asian_yn1", "pi_yn1",
                                    "native_yn1","other_yn1", "ni_yn1"))
 
-x_vars2 <- c("m.glm_tested_after", "m.glm_pos_after", "m.glm_pos_wo_mj_after", 
-            "m.glm_reported_after", "m.glm_reported_pos_after", 
-            "m.glm_reported_pos_wo_mj_after")
+x_vars2 <- c("m.glm_tested_after", "m.glm_tested_pos_after", 
+             "m.glm_tested_pos_wo_mj_after", "m.glm_reported_after", 
+             "m.glm_cps_w_pos_after", "m.glm_cps_w_pos_wo_mj_after")
 
 for (x_var in x_vars2) {
   coef_data <- as.data.table(tidy(get(x_var))) %>%
@@ -365,14 +490,14 @@ coef_table_after <- coef_table_after %>%
   mutate(term = ifelse(term == "black_yn1", "Black or African American", term)) %>%
   mutate(term = ifelse(term == "native_yn1", "American Indian or Alaska Native", 
                        term)) %>%
-  mutate(term = ifelse(term == "other_yn1","Multiracial/Other", term))%>%
+  mutate(term = ifelse(term == "other_yn1", "Multiracial/Other", term)) %>%
   mutate(term = ifelse(term == "pi_yn1", "Other Pacific Islander", term)) %>%
   mutate(term = ifelse(term == "ni_yn1", "Not Indicated", term)) %>%
   mutate(term = ifelse(term == "white_yn1", "White", term)) %>%
   mutate(term = ifelse(term == "maternal_age", "Maternal Age", term)) %>%
-  setnames(c("term", "m.glm_tested_after", "m.glm_pos_after", 
-             "m.glm_pos_wo_mj_after", "m.glm_reported_after", 
-             "m.glm_reported_pos_after", "m.glm_reported_pos_wo_mj_after"), 
+  setnames(c("term", "m.glm_tested_after", "m.glm_tested_pos_after", 
+             "m.glm_tested_pos_wo_mj_after", "m.glm_reported_after", 
+             "m.glm_cps_w_pos_after", "m.glm_cps_w_pos_wo_mj_after"), 
            c("Features", "Tested", "Positive Result", 
              "Positive Result (excluding marijuana)", "Reported to CPS", 
              "Reported to CPS with Positive Result", 
@@ -635,6 +760,9 @@ server <- function(input, output) {
   
   #create_timeseries_plot <- function(y_var, title) { }
   
+  ####################
+  #time series plots (x6) page 1
+  ###################
   
   
   output$tested_plot <- renderPlot({
@@ -776,7 +904,9 @@ server <- function(input, output) {
         input$radio_trendline == "Trendline")geom_smooth(se = FALSE)}
     })
   
-  ############# page 2
+  #############
+  # page 2
+  ###################
   
     # Render table
   output$c_table <- renderDT({
@@ -816,8 +946,10 @@ server <- function(input, output) {
   })
   
   
+  ######################
+  # page 3
+  #####################
   
-  ##################### page 3
   output$indication_chart <- renderPlot({
     gghistogram(fairlabs_data_tested_after, x = "order_indication", stat = "count", position = "stack", color = "maternal_race", fill = "maternal_race", xlab = "Order Indication", ylab = "Number of Patients") %>% ggpar(x.text.angle = 60, legend = "right", font.x = 17, font.tickslab = 15, font.y = 17, font.legend = 17, legend.title = "Maternal Race") + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
   })
