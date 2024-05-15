@@ -1,0 +1,1486 @@
+---
+title: "adlm_competition"
+format: html
+editor: visual
+---
+
+## Data Cleanup - DONE
+
+```{r}
+##To clean the R environment 
+rm(list=ls())
+
+##read libraries
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(lubridate)
+library(data.table)
+library(broom)
+library(shiny)
+library(DT)
+library(bslib)
+library(nnet)
+library(shinydashboard)
+library(shinythemes)
+
+
+# Read in data in appropriate formats 
+# The first test w an indication is 2028-02-27 & delivery 2-26 = intervention date
+fairlabs_data <- read_csv("fairlabs_data.csv") %>%
+  mutate(delivery_date = as.Date(delivery_date), 
+         maternal_race = gsub("\n", " ", maternal_race)) %>%
+  rename_with(~ gsub("-", "_", .x), starts_with("detected_")) %>%
+  filter(maternal_age != 123) %>%
+  mutate(delivery_month = floor_date(delivery_date, unit = "month"),
+         delivery_month2 = as.numeric(interval("2028-02-01", delivery_month) /
+                                        months(1)),
+         BA_intervention = ifelse(delivery_date >= "2028-02-26","After","Before"),
+         tested = ifelse(is.na(uds_order_id),"Not Tested","Tested"),
+         reported = ifelse(!is.na(cps_reporting_date),"Reported","Not Reported"),
+         tested10 = as.double(ifelse(is.na(uds_order_id),0,1)),
+         reported10 = as.double(ifelse(is.na(cps_reporting_date),0,1)),
+         order_indication = ifelse(is.na(order_indication), 
+                                   "No indication provided",order_indication),
+         detected_phenobarbital = ifelse(detected_phenobarbital == 2, 1, 
+                                         detected_phenobarbital), 
+         tested_pos = ifelse(rowSums(select(.,starts_with("detected_"))) == 0,0,1),
+         tested_pos_wo_mj = ifelse(rowSums(select(., starts_with("detected_"), -starts_with("detected_tetrahydrocannabinol"))) == 0,0,1), 
+         tested_pos_illicit = ifelse(detected_6_acetylmorphine == 1|
+                                       detected_benzoylecgonine == 1 |
+                                       detected_cocaine == 1 |
+                                       detected_lsd == 1 | 
+                                       detected_methamphetamine == 1 |
+                                       detected_methylbenzodioxolylbutanamine == 1|
+                                       detected_methylenedioxyamphetamine == 1 |
+                                       detected_methylenedioxymethylamphetamine==1|
+                                       detected_phencyclidine == 1 |
+                                       detected_rohypnol == 1 |
+                                       detected_xylazine == 1, 1, 0), 
+         maternal_decade = case_when(
+           maternal_age < 20 ~ "<20 years old",
+           maternal_age < 35 & maternal_age > 19 ~ "20-35 years old",
+           maternal_age > 34 ~ ">35 years old",
+           TRUE ~ NA_character_
+         ),
+         teen_yn = ifelse(maternal_age < 20,1,0), 
+         adult_yn = ifelse(maternal_age < 35 & maternal_age > 19,1,0),
+         geriatric_yn = ifelse(maternal_age > 34,1,0)
+  )
+
+
+# Clean race data if there are multiple races listed
+fairlabs_data <- fairlabs_data %>%
+  mutate(maternal_race = case_when(
+           maternal_race %in% 
+             c("American Indian or Alaska Native Black or African American",
+               "American Indian or Alaska Native Black or African American White",
+               "American Indian or Alaska Native White",
+               "Asian Black or African American",
+               "Asian White", "Black or African American Other",
+               "Black or African American Other Pacific Islander",
+               "Black or African American Unknown White",
+               "Black or African American White", "Other",
+               "Other Other Pacific Islander White", "Other Unknown",
+               "Other Pacific Islander White") ~ "Multiracial/Other",
+           maternal_race %in% c("Asian Declined", "Asian Unable to Answer") 
+           ~ "Asian",
+           maternal_race %in% c("Black or African American Unable to Answer",
+                                "Black or African American Unknown") 
+           ~ "Black or African American",
+           maternal_race %in% c("Other White", "Declined White", 
+                                "Unable to Answer White", "Unknown White",
+                                "Other Unknown White") ~ "White",
+           maternal_race %in% c("Declined", "Declined Unable to Answer", 
+                                "Declined Unknown", "Unable to Answer")
+           ~ "Not Indicated",
+           TRUE ~ maternal_race)
+         ) 
+
+
+
+# One hot encoding 
+fairlabs_data <- fairlabs_data %>%
+  mutate(white_yn = ifelse(maternal_race == "White",1,0), 
+         black_yn = ifelse(maternal_race == "Black or African American",1,0), 
+         asian_yn = ifelse(maternal_race == "Asian",1,0), 
+         pi_yn = ifelse(maternal_race == "Other Pacific Islander",1,0),
+         native_yn= ifelse(maternal_race =="American Indian or Alaska Native",1,0),
+         other_yn = ifelse(maternal_race == "Multiracial/Other",1,0),
+         ni_yn = ifelse(maternal_race == "Not Indicated",1,0),
+         cps_w_pos = ifelse(reported10 == 1 & tested_pos == 1,1,0), 
+         cps_w_pos_wo_mj = ifelse(reported10 == 1 & tested_pos_wo_mj==1,1,0), 
+         cps_w_pos_illicit = ifelse(reported10 == 1 & tested_pos_illicit==1,1,0))
+
+  
+# Set variables to factors 
+fairlabs_data$white_yn <- as.factor(fairlabs_data$white_yn)
+fairlabs_data$black_yn <- as.factor(fairlabs_data$black_yn)
+fairlabs_data$asian_yn <- as.factor(fairlabs_data$asian_yn)
+fairlabs_data$pi_yn <- as.factor(fairlabs_data$pi_yn)
+fairlabs_data$native_yn <- as.factor(fairlabs_data$native_yn)
+fairlabs_data$other_yn <- as.factor(fairlabs_data$other_yn)
+fairlabs_data$ni_yn <- as.factor(fairlabs_data$ni_yn)
+fairlabs_data$tested <- as.factor(fairlabs_data$tested)
+fairlabs_data$reported <- as.factor(fairlabs_data$reported)
+fairlabs_data$tested_pos <- as.factor(fairlabs_data$tested_pos)
+fairlabs_data$tested_pos_wo_mj <- as.factor(fairlabs_data$tested_pos_wo_mj)
+fairlabs_data$cps_w_pos <- as.factor(fairlabs_data$cps_w_pos)
+fairlabs_data$cps_w_pos_wo_mj <- as.factor(fairlabs_data$cps_w_pos_wo_mj)
+fairlabs_data$order_indication <- as.factor(fairlabs_data$order_indication)
+
+
+
+# Create filtered datasets 
+fairlabs_data_tested <- fairlabs_data %>%
+  filter(tested10 == 1)
+
+fairlabs_data_before <- fairlabs_data %>%
+  filter(BA_intervention == "Before")
+
+fairlabs_data_tested_before <- fairlabs_data_tested %>%
+  filter(BA_intervention == "Before")
+
+fairlabs_data_after <- fairlabs_data %>%
+  filter(BA_intervention == "After")
+
+fairlabs_data_tested_after <- fairlabs_data_tested %>%
+  filter(BA_intervention == "After")
+
+
+```
+
+## Time Series Data - DONE
+
+```{r}
+# Create a function to calculate monthly statistics for each demographic
+calculate_month_count <- function(data, demographic, demographic_name) {
+  data %>%
+    group_by(delivery_month2, {{ demographic }}) %>%
+    summarize(count = n(), 
+              num_tested = sum(tested10, na.rm = TRUE), 
+              pct_pts_tested = (num_tested/count)*100, 
+              num_pos = sum(tested_pos == 1, na.rm = TRUE), 
+              num_pos_wo_mj = sum(tested_pos_wo_mj == 1, na.rm = TRUE),
+              num_pos_illicit = sum(tested_pos_illicit == 1, na.rm = TRUE), 
+              pct_tests_pos = (num_pos/num_tested)*100, 
+              pct_tests_pos_wo_mj = (num_pos_wo_mj/num_tested)*100,
+              pct_tests_pos_illicit = (num_pos_illicit/num_tested*100),
+              num_reported = sum(tested10 == 1 & reported10 == 1, na.rm = TRUE), 
+              pct_tests_rep = (num_reported / num_tested)*100,
+              num_reported_pos = sum(tested_pos == 1 &reported10 == 1,na.rm=TRUE),
+              pct_tests_rep_pos = (num_reported_pos / num_pos)*100,
+              num_reported_pos_wo_mj = sum(tested_pos_wo_mj==1 & reported10==1,
+                                           na.rm = TRUE),
+              pct_tests_rep_pos_wo_mj = (num_reported_pos_wo_mj/num_pos_wo_mj)*100,
+              num_reported_pos_illicit = sum(tested_pos_illicit==1 & reported10==1,
+                                             na.rm=TRUE),
+              pct_tests_rep_pos_illicit=(num_reported_pos_illicit/
+                                           num_pos_illicit)*100)%>%
+    mutate(Demographic = {{ demographic_name }})
+}
+
+# Calculate monthly statistics for race, age, and overall demographics 
+month_count_race <- calculate_month_count(fairlabs_data, maternal_race, 
+                                          maternal_race)
+month_count_age <- calculate_month_count(fairlabs_data, maternal_decade, 
+                                         maternal_decade)
+month_count_overall <- calculate_month_count(fairlabs_data, NA, "Overall")
+
+# Combine these dataframes 
+month_count_combined <- rbind(month_count_age, month_count_race)
+month_count_combined <- rbind(month_count_combined, month_count_overall) %>%
+  select(-maternal_decade, -maternal_race, -"NA")
+month_count_combined <- replace(month_count_combined,is.na(month_count_combined),0)
+```
+
+## GLM code - need to make into function?
+
+```{r}
+
+# Calculate the size of each demographic group before and after intervention for exclusion purposes
+race_pct <- fairlabs_data %>%
+  group_by(BA_intervention, maternal_race) %>%
+  summarize(cnt = n(), pct = cnt/length(fairlabs_data$encounter_id)*100)
+
+# Rename the maternal races to use in the functions to create the GLMs 
+race_pct <- race_pct %>%
+  mutate(maternal_race = case_when(
+  maternal_race == "American Indian or Alaska Native" ~ "native_yn",
+  maternal_race == "Asian" ~ "asian_yn",
+  maternal_race == "Black or African American" ~ "black_yn",
+  maternal_race == "Multiracial/Other" ~ "other_yn",
+  maternal_race == "Not Indicated" ~ "ni_yn",
+  maternal_race == "Other Pacific Islander" ~ "pi_yn",
+  maternal_race == "White" ~ "white_yn",
+  TRUE ~ maternal_race))
+
+# Calculate the size of each demographic group before and after intervention that were tested, for exclusion purposes
+race_pct_tested <- fairlabs_data_tested %>%
+  group_by(BA_intervention, maternal_race) %>%
+  summarize(cnt = n(), pct = cnt/length(fairlabs_data_tested$encounter_id)*100)
+
+# Rename the maternal races to use in the functions to create the GLMs 
+race_pct_tested <- race_pct_tested %>%
+  mutate(maternal_race = case_when(
+  maternal_race == "American Indian or Alaska Native" ~ "native_yn",
+  maternal_race == "Asian" ~ "asian_yn",
+  maternal_race == "Black or African American" ~ "black_yn",
+  maternal_race == "Multiracial/Other" ~ "other_yn",
+  maternal_race == "Not Indicated" ~ "ni_yn",
+  maternal_race == "Other Pacific Islander" ~ "pi_yn",
+  maternal_race == "White" ~ "white_yn",
+  TRUE ~ maternal_race))
+
+
+#######################
+      #tested
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct, cnt > 20 & 
+                                  BA_intervention == "Before")$maternal_race
+formula_str <- paste("tested ~ maternal_age +", paste(selected_races_before,
+                                                      collapse = " + "))
+m.glm_tested_before <- glm(formula_str, data=fairlabs_data_before, 
+                           na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM 
+selected_races_after <- subset(race_pct, cnt > 20 & 
+                                 BA_intervention == "After")$maternal_race
+formula_str <- paste("tested ~ maternal_age +", paste(selected_races_after,
+                                                      collapse = " + "))
+m.glm_tested_after <- glm(formula_str, data=fairlabs_data_after, 
+                          na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_after)
+
+
+#######################
+        #positive UDS
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct_tested, cnt > 10 & 
+                                  BA_intervention == "Before")$maternal_race
+formula_str <- paste("tested_pos ~ maternal_age +", paste(selected_races_before,
+                                                          collapse = " + "))
+m.glm_tested_pos_before <- glm(formula_str, data=fairlabs_data_tested_before, 
+                               na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM 
+selected_races_after <- subset(race_pct_tested, cnt > 10 & 
+                                 BA_intervention == "After")$maternal_race
+formula_str <- paste("tested_pos ~ maternal_age +", paste(selected_races_after,
+                                                          collapse = " + "))
+m.glm_tested_pos_after <- glm(formula_str, data=fairlabs_data_tested_after, 
+                              na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_after)
+
+
+#######################
+        #positive UDS w/o marijuana
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct_tested, cnt > 10 & 
+                                  BA_intervention == "Before")$maternal_race
+formula_str <- paste("tested_pos_wo_mj ~ maternal_age +", 
+                     paste(selected_races_before, collapse = " + "))
+m.glm_tested_pos_wo_mj_before <- glm(formula_str, data=fairlabs_data_tested_before,
+                                     na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_wo_mj_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM
+selected_races_after <- subset(race_pct_tested, cnt > 10 & 
+                                 BA_intervention == "After")$maternal_race
+formula_str <- paste("tested_pos_wo_mj ~ maternal_age +", 
+                     paste(selected_races_after, collapse = " + "))
+m.glm_tested_pos_wo_mj_after <- glm(formula_str, data=fairlabs_data_tested_after, 
+                                    na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_wo_mj_after)
+
+
+#######################
+        #positive UDS illicit
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct_tested, cnt > 10 & 
+                                  BA_intervention == "Before")$maternal_race
+formula_str <- paste("tested_pos_illicit ~ maternal_age +", 
+                     paste(selected_races_before, collapse = " + "))
+m.glm_tested_pos_illicit_before <- glm(formula_str, data = 
+                                         fairlabs_data_tested_before, 
+                                       na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_illicit_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM
+selected_races_after <- subset(race_pct_tested, cnt > 10 
+                               & BA_intervention == "After")$maternal_race
+formula_str <- paste("tested_pos_illicit ~ maternal_age +", 
+                     paste(selected_races_after, collapse = " + "))
+m.glm_tested_pos_illicit_after <- glm(formula_str, data=fairlabs_data_tested_after,
+                                      na.action = "na.exclude", family = binomial)
+summary(m.glm_tested_pos_illicit_after)
+
+
+#######################
+        #reported (of those tested)
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct_tested, cnt > 10 & 
+                                  BA_intervention == "Before")$maternal_race
+formula_str <- paste("reported ~ maternal_age +", paste(selected_races_before,
+                                                        collapse = " + "))
+m.glm_reported_before <- glm(formula_str, data=fairlabs_data_tested_before, 
+                             na.action = "na.exclude", family = binomial)
+summary(m.glm_reported_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM
+selected_races_after <- subset(race_pct_tested, cnt > 10 & 
+                                 BA_intervention == "After")$maternal_race
+formula_str <- paste("reported ~ maternal_age +", paste(selected_races_after,
+                                                        collapse = " + "))
+m.glm_reported_after <- glm(formula_str, data=fairlabs_data_tested_after, 
+                            na.action = "na.exclude", family = binomial)
+summary(m.glm_reported_after)
+
+
+#######################
+        #reported (of those positive)
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct_tested, cnt > 10 & 
+                                  BA_intervention == "Before")$maternal_race
+formula_str <- paste("cps_w_pos ~ maternal_age +", paste(selected_races_before,
+                                                         collapse = " + "))
+m.glm_cps_w_pos_before <- glm(formula_str, data=fairlabs_data_tested_before %>% 
+                                filter(tested_pos == 1), na.action = "na.exclude",
+                              family = binomial)
+summary(m.glm_cps_w_pos_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM
+selected_races_after <- subset(race_pct_tested, cnt > 10 
+                               & BA_intervention == "After")$maternal_race
+formula_str <- paste("cps_w_pos ~ maternal_age +", paste(selected_races_after,
+                                                         collapse = " + "))
+m.glm_cps_w_pos_after <- glm(formula_str, data=fairlabs_data_tested_after  %>%
+                               filter(tested_pos == 1), na.action = "na.exclude",
+                             family = binomial)
+summary(m.glm_cps_w_pos_after)
+
+
+#######################
+        #reported (of those positive w/o marijuana)
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct_tested, cnt > 10 
+                                & BA_intervention == "Before")$maternal_race
+formula_str <- paste("cps_w_pos_wo_mj ~ maternal_age +", 
+                     paste(selected_races_before, collapse = " + "))
+m.glm_cps_w_pos_wo_mj_before <- glm(formula_str, data=fairlabs_data_tested_before
+                                    %>% filter(tested_pos == 1), 
+                                    na.action = "na.exclude", family = binomial)
+summary(m.glm_cps_w_pos_wo_mj_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM
+selected_races_after <- subset(race_pct_tested, cnt > 10 
+                               & BA_intervention == "After")$maternal_race
+formula_str <- paste("cps_w_pos_wo_mj ~ maternal_age +", 
+                     paste(selected_races_after, collapse = " + "))
+m.glm_cps_w_pos_wo_mj_after <- glm(formula_str, data=fairlabs_data_tested_after 
+                                   %>% filter(tested_pos == 1), 
+                                   na.action = "na.exclude", family = binomial)
+summary(m.glm_cps_w_pos_wo_mj_after)
+
+
+#######################
+        #reported (of those positive illicit)
+#######################
+
+# Select races to include in the model based on the quantity per demographic before intervention, then create the GLM
+selected_races_before <- subset(race_pct_tested, cnt > 10 & 
+                                  BA_intervention == "Before")$maternal_race
+formula_str <- paste("cps_w_pos_illicit ~ maternal_age +", 
+                     paste(selected_races_before, collapse = " + "))
+m.glm_cps_w_pos_illicit_before <- glm(formula_str, data=fairlabs_data_tested_before
+                                      %>% filter(tested_pos == 1), 
+                                      na.action = "na.exclude", family = binomial)
+summary(m.glm_cps_w_pos_illicit_before)
+
+# Select races to include in the model based on the quantity per demographic after intervention, then create the GLM
+selected_races_after <- subset(race_pct_tested, cnt > 10 & 
+                                 BA_intervention == "After")$maternal_race
+formula_str <- paste("cps_w_pos_illicit ~ maternal_age +", 
+                     paste(selected_races_after, collapse = " + "))
+m.glm_cps_w_pos_illicit_after <- glm(formula_str, data=fairlabs_data_tested_after 
+                                     %>% filter(tested_pos == 1), 
+                                     na.action = "na.exclude", family = binomial)
+summary(m.glm_cps_w_pos_illicit_after)
+
+```
+
+## 
+
+```{r}
+
+
+
+```
+
+## Build ML Coef Tables from models above (BEFORE / AFTER)
+
+```{r}
+
+#######################
+        #Before
+#######################
+
+
+coef_table_before <- data.frame("term" = c("maternal_age", "black_yn1", 
+                                   "white_yn1", "asian_yn1", "pi_yn1",
+                                   "native_yn1","other_yn1", "ni_yn1"))
+
+x_vars <- c("m.glm_tested_before", "m.glm_tested_pos_before", 
+            "m.glm_tested_pos_wo_mj_before", "m.glm_tested_pos_illicit_before",
+            "m.glm_reported_before", "m.glm_cps_w_pos_before", 
+            "m.glm_cps_w_pos_wo_mj_before", "m.glm_cps_w_pos_illicit_before")
+
+for (x_var in x_vars) {
+  coef_data <- as.data.table(tidy(get(x_var))) %>%
+    mutate(estimate = ifelse(p.value < 0.05, as.character(signif(estimate,2)), "Not Significant")) %>%
+    mutate(estimate = ifelse(is.na(estimate), "N/A", estimate)) %>%
+    select(term, estimate) %>%
+    rename_at(vars(estimate), ~ x_var)
+  coef_table_before <- merge(coef_table_before, coef_data, by = "term", all.x = TRUE)
+}
+
+
+coef_table_before <- coef_table_before %>%
+  arrange(factor(term, levels = c("maternal_age", "black_yn1", 
+                                   "white_yn1", "asian_yn1", "pi_yn1",
+                                   "native_yn1","other_yn1", "ni_yn1"))) %>%
+  mutate(term = ifelse(term == "asian_yn1", "Asian", term)) %>% 
+  mutate(term = ifelse(term == "black_yn1", "Black or African American", term)) %>%
+  mutate(term = ifelse(term == "native_yn1", "American Indian or Alaska Native", 
+                       term)) %>%
+  mutate(term = ifelse(term == "other_yn1","Multiracial/Other", term))%>%
+  mutate(term = ifelse(term == "pi_yn1", "Other Pacific Islander", term)) %>%
+  mutate(term = ifelse(term == "ni_yn1", "Not Indicated", term)) %>%
+  mutate(term = ifelse(term == "white_yn1", "White", term)) %>%
+  mutate(term = ifelse(term == "maternal_age", "Maternal Age", term)) %>%
+  setnames(c("term", "m.glm_tested_before", "m.glm_tested_pos_before", 
+            "m.glm_tested_pos_wo_mj_before", "m.glm_tested_pos_illicit_before",
+            "m.glm_reported_before", "m.glm_cps_w_pos_before", 
+            "m.glm_cps_w_pos_wo_mj_before", "m.glm_cps_w_pos_illicit_before"), 
+           c("Features", "Tested", "Positive Result", 
+             "Positive Result (excluding marijuana)", "Positive Result (illicit)",
+             "Reported to CPS", "Reported to CPS with Positive Result", 
+             "Reported to CPS with Positive Result (excluding marijuana)", 
+             "Reported to CPS with Positive Result (illicit)"))
+
+rownames(coef_table_before) <- coef_table_before$Features
+coef_table_before$Features <- NULL
+coef_table_before <- coef_table_before %>%
+  mutate_all(~ ifelse(is.na(.), "Excluded", .))
+
+
+#######################
+        #After
+#######################
+
+coef_table_after <- data.frame("term" = c("maternal_age", "black_yn1", 
+                                   "white_yn1", "asian_yn1", "pi_yn1",
+                                   "native_yn1","other_yn1", "ni_yn1"))
+
+x_vars2 <- c("m.glm_tested_after", "m.glm_tested_pos_after", 
+             "m.glm_tested_pos_wo_mj_after", "m.glm_tested_pos_illicit_after",
+             "m.glm_reported_after", "m.glm_cps_w_pos_after", 
+             "m.glm_cps_w_pos_wo_mj_after", "m.glm_cps_w_pos_illicit_after")
+
+for (x_var in x_vars2) {
+  coef_data <- as.data.table(tidy(get(x_var))) %>%
+    mutate(estimate = ifelse(p.value < 0.05, as.character(signif(estimate,2)), "Not Significant")) %>%
+    select(term, estimate) %>%
+    rename_at(vars(estimate), ~ x_var)
+  coef_table_after <- merge(coef_table_after, coef_data, by = "term", all.x = TRUE)
+}
+
+coef_table_after <- coef_table_after %>%
+  arrange(factor(term, levels = c("maternal_age", "black_yn1", 
+                                   "white_yn1", "asian_yn1", "pi_yn1",
+                                   "native_yn1","other_yn1", "ni_yn1"))) %>%
+  mutate(term = ifelse(term == "asian_yn1", "Asian", term)) %>% 
+  mutate(term = ifelse(term == "black_yn1", "Black or African American", term)) %>%
+  mutate(term = ifelse(term == "native_yn1", "American Indian or Alaska Native", 
+                       term)) %>%
+  mutate(term = ifelse(term == "other_yn1", "Multiracial/Other", term)) %>%
+  mutate(term = ifelse(term == "pi_yn1", "Other Pacific Islander", term)) %>%
+  mutate(term = ifelse(term == "ni_yn1", "Not Indicated", term)) %>%
+  mutate(term = ifelse(term == "white_yn1", "White", term)) %>%
+  mutate(term = ifelse(term == "maternal_age", "Maternal Age", term)) %>%
+  setnames(c("term", "m.glm_tested_after", "m.glm_tested_pos_after", 
+             "m.glm_tested_pos_wo_mj_after", "m.glm_tested_pos_illicit_after",
+             "m.glm_reported_after", "m.glm_cps_w_pos_after", 
+             "m.glm_cps_w_pos_wo_mj_after", "m.glm_cps_w_pos_illicit_after"), 
+           c("Features", "Tested", "Positive Result", 
+             "Positive Result (excluding marijuana)", "Positive Result (illicit)",
+             "Reported to CPS", "Reported to CPS with Positive Result", 
+             "Reported to CPS with Positive Result (excluding marijuana)",
+             "Reported to CPS with Positive Result (illicit)"))
+
+rownames(coef_table_after) <- coef_table_after$Features
+coef_table_after$Features <- NULL
+coef_table_after <- coef_table_after %>%
+  mutate_all(~ ifelse(is.na(.), "Excluded", .))
+
+```
+
+## Maternal Race Pie Charts
+
+```{r}
+create_pie_chart <- function(data, x_var) {
+  data %>%
+    mutate(maternal_race = str_wrap(maternal_race, width = 20)) %>%
+    group_by(maternal_race, {{ x_var }}) %>%
+    summarize(count = n()) %>%
+    group_by(maternal_race) %>%
+    mutate(total = sum(count)) %>%
+    ggplot(aes(x = "", y = count/total, fill = {{ x_var }})) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    facet_wrap(~maternal_race) +
+    geom_text(aes(label = count), color = "white", size = 6, position = position_stack(vjust = 0.5)) +
+    theme_void() +
+    theme(legend.position = "right",
+          legend.text = element_text(size = 15), 
+          legend.title = element_blank(), 
+          strip.text = element_text(size = 13))
+}
+
+```
+
+## Indications sensitivity specificiy
+
+```{r}
+
+ss_table <- fairlabs_data_after %>%
+      mutate(order_indication = ifelse(order_indication == "Substance use during pregnancy, excluding marijuana" | order_indication == "History of opioids prescribed during pregnancy", "Substance Indication", "Other Indication")) %>%
+      group_by(order_indication) %>%
+      summarize(Positive = sum(tested_pos_wo_mj == 1, na.rm = TRUE), Negative = n()-Positive) %>%
+  arrange(factor(order_indication, levels = c("Substance Indication", "Other Indication")))
+
+
+    
+ss_matrix <- as.matrix(ss_table[,-1])
+rownames(ss_matrix) <- ss_table$order_indication
+ss_table <- as.data.frame(ss_matrix)
+
+sensitivity <- ss_table$Positive[1] / (ss_table$Positive[1]+ss_table$Positive[2])
+specificity <- ss_table$Negative[2] / (ss_table$Negative[2]+ss_table$Negative[1])
+
+  
+  
+
+```
+
+## Chisq make table
+
+```{r}
+
+```
+
+## NEW chi sq make tables
+
+```{r}
+
+
+#age_table_bef <- with(ages_chi_before, table(maternal_decade, c(pct_tested_expected, pct_tested_obs)))
+#age_table_bef
+#chisq.test(ages_chi_before)
+#ages_chi_before_tested 
+
+
+#######################
+        #Before
+#######################
+
+ages_chi_before <- fairlabs_data_before %>%
+  mutate(maternal_decade = case_when(
+    teen_yn == 1 ~ "teen_yn",
+    adult_yn == 1 ~ "adult_yn",
+    geriatric_yn == 1 ~ "geriatric_yn"
+    )) %>%
+  group_by(maternal_decade) %>%
+  summarize(pct_tested_expected = round(sum(fairlabs_data_before$tested10 == 1) / 
+               length(fairlabs_data_before$encounter_id) * 100, 2), 
+            pct_tested_obs = round(sum(tested10 == 1) / n() * 100, 2),
+            pct_reported_expected = round(sum(fairlabs_data_before$reported10 == 1) / 
+              length(fairlabs_data_before$encounter_id) * 100,2), 
+            pct_reported_obs = round(sum(reported10 == 1) / n() * 100, 2))
+
+# P value tested
+ages_tested_before_table <- matrix(c(ages_chi_before$pct_tested_obs, 
+                                     ages_chi_before$pct_tested_expected), 
+                                   nrow = 2, byrow = TRUE)
+ages_tested_before_chi <- chisq.test(ages_tested_before_table)
+ages_tested_before_chi_p <- ages_tested_before_chi$p.value
+
+# P value reported
+ages_reported_before_table <- matrix(c(ages_chi_before$pct_reported_obs, 
+                                       ages_chi_before$pct_reported_expected), 
+                                     nrow = 2, byrow = TRUE)
+ages_reported_before_chi <- chisq.test(ages_reported_before_table)
+ages_reported_before_chi_p <- ages_reported_before_chi$p.value
+  
+#Clean table
+ages_chi_before <- ages_chi_before %>%
+  mutate(pct_tested_expected = paste(pct_tested_expected, "%"), 
+         pct_tested_obs = paste(pct_tested_obs, "%"),
+         pct_reported_expected = paste(pct_reported_expected, "%"),
+         pct_reported_obs = paste(pct_reported_obs, "%")) %>%
+  arrange(factor(maternal_decade, levels = c("teen_yn", "adult_yn", "geriatric_yn"))) %>%
+  mutate(maternal_decade = case_when(
+    maternal_decade == "teen_yn" ~ "<20 years old",
+    maternal_decade == "adult_yn" ~ "20-35 years old",
+    maternal_decade == "geriatric_yn" ~ ">35 years old"
+    )) %>%
+  rename("Expected Rate of Testing" = pct_tested_expected, 
+         "Observed Rate of Testing" = pct_tested_obs, 
+         "Expected Rate of Reporting" = pct_reported_expected, 
+         "Observed Rate of Reporting" = pct_reported_obs, 
+         "Maternal Age" = maternal_decade)
+
+# Convert to matrix and set row names
+ages_chi_before_mat <- as.matrix(ages_chi_before[, -1])
+rownames(ages_chi_before_mat) <- ages_chi_before$`Maternal Age`
+ages_chi_before <- as.data.frame(ages_chi_before_mat)
+
+
+#######################
+        #Before Race
+#######################
+
+races_chi_before <- fairlabs_data_before %>%
+  mutate(maternal_race = case_when(
+  native_yn == 1 ~ "native_yn",
+  asian_yn == 1 ~ "asian_yn",
+  black_yn == 1 ~ "black_yn",
+  other_yn == 1 ~ "other_yn",
+  ni_yn == 1 ~ "ni_yn",
+  pi_yn == 1 ~ "pi_yn",
+  white_yn == 1 ~ "white_yn")) %>%
+  group_by(maternal_race) %>%
+  summarize(pct_tested_expected = round(sum(fairlabs_data_before$tested10 == 1) / 
+               length(fairlabs_data_before$encounter_id) * 100, 2), 
+            pct_tested_obs = round(sum(tested10 == 1) / n() * 100, 2),
+            pct_reported_expected = round(sum(fairlabs_data_before$reported10 == 1) / 
+              length(fairlabs_data_before$encounter_id)*100,2), 
+            pct_reported_obs = round(sum(reported10 == 1) / n() * 100, 2)) 
+
+# P value tested
+races_tested_before_table <- matrix(c(races_chi_before$pct_tested_obs, 
+                                     races_chi_before$pct_tested_expected), 
+                                   nrow = 2, byrow = TRUE)
+races_tested_before_chi <- chisq.test(races_tested_before_table)
+races_tested_before_chi_p <- races_tested_before_chi$p.value
+
+# P value reported
+races_reported_before_table <- matrix(c(races_chi_before$pct_reported_obs, 
+                                       races_chi_before$pct_reported_expected), 
+                                     nrow = 2, byrow = TRUE)
+races_reported_before_chi <- chisq.test(races_reported_before_table)
+races_reported_before_chi_p <- races_reported_before_chi$p.value
+
+#Clean table 
+races_chi_before <- races_chi_before %>%
+  mutate(pct_tested_expected = paste(pct_tested_expected, "%"), 
+         pct_tested_obs = paste(pct_tested_obs, "%"),
+         pct_reported_expected = paste(pct_reported_expected, "%"),
+         pct_reported_obs = paste(pct_reported_obs, "%")) %>%
+  arrange(factor(maternal_race, levels = c("black_yn", "white_yn", "asian_yn", "pi_yn",
+                                   "native_yn1","other_yn", "ni_yn"))) %>%
+  mutate(maternal_race = ifelse(maternal_race == "asian_yn", "Asian", maternal_race)) %>% 
+  mutate(maternal_race = ifelse(maternal_race == "black_yn", "Black or African American", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "native_yn", "American Indian or Alaska Native", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "other_yn", "Multiracial/Other", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "pi_yn", "Other Pacific Islander", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "ni_yn", "Not Indicated", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "white_yn", "White", maternal_race)) %>%
+  rename("Expected Rate of Testing" = pct_tested_expected, 
+         "Observed Rate of Testing" = pct_tested_obs, 
+         "Expected Rate of Reporting" = pct_reported_expected, 
+         "Observed Rate of Reporting" = pct_reported_obs, 
+         "Maternal Race" = maternal_race)
+
+ # Convert to matrix and set row names
+races_chi_before_mat <- as.matrix(races_chi_before[, -1])
+rownames(races_chi_before_mat) <- races_chi_before$`Maternal Race`
+races_chi_before <- as.data.frame(races_chi_before_mat)
+
+
+
+
+
+#######################
+        #After Age
+#######################
+
+ages_chi_after <- fairlabs_data_after %>%
+  mutate(maternal_decade = case_when(
+    teen_yn == 1 ~ "teen_yn",
+    adult_yn == 1 ~ "adult_yn",
+    geriatric_yn == 1 ~ "geriatric_yn"
+    )) %>%
+  group_by(maternal_decade) %>%
+  summarize(pct_tested_expected = round(sum(fairlabs_data_after$tested10 == 1) / 
+               length(fairlabs_data_after$encounter_id) * 100, 2), 
+            pct_tested_obs = round(sum(tested10 == 1) / n() * 100, 2),
+            pct_reported_expected = round(sum(fairlabs_data_after$reported10 == 1) / 
+              length(fairlabs_data_after$encounter_id) * 100,2), 
+            pct_reported_obs = round(sum(reported10 == 1) / n() * 100, 2)) 
+
+# P value tested
+ages_tested_after_table <- matrix(c(ages_chi_after$pct_tested_obs, 
+                                     ages_chi_after$pct_tested_expected), 
+                                   nrow = 2, byrow = TRUE)
+ages_tested_after_chi <- chisq.test(ages_tested_after_table)
+ages_tested_after_chi_p <- ages_tested_after_chi$p.value
+
+# P value reported
+ages_reported_after_table <- matrix(c(ages_chi_after$pct_reported_obs, 
+                                       ages_chi_after$pct_reported_expected), 
+                                     nrow = 2, byrow = TRUE)
+ages_reported_after_chi <- chisq.test(ages_reported_after_table)
+ages_reported_after_chi_p <- ages_reported_after_chi$p.value
+
+#Clean table 
+ages_chi_after <- ages_chi_after %>%
+  mutate(pct_tested_expected = paste(pct_tested_expected, "%"), 
+         pct_tested_obs = paste(pct_tested_obs, "%"),
+         pct_reported_expected = paste(pct_reported_expected, "%"),
+         pct_reported_obs = paste(pct_reported_obs, "%")) %>%
+  arrange(factor(maternal_decade, levels = c("teen_yn", "adult_yn", "geriatric_yn"))) %>%
+  mutate(maternal_decade = case_when(
+    maternal_decade == "teen_yn" ~ "<20 years old",
+    maternal_decade == "adult_yn" ~ "20-35 years old",
+    maternal_decade == "geriatric_yn" ~ ">35 years old"
+    )) %>%
+  rename("Expected Rate of Testing" = pct_tested_expected, 
+         "Observed Rate of Testing" = pct_tested_obs, 
+         "Expected Rate of Reporting" = pct_reported_expected, 
+         "Observed Rate of Reporting" = pct_reported_obs, 
+         "Maternal Age" = maternal_decade)
+
+# Convert to matrix and set row names
+ages_chi_after_mat <- as.matrix(ages_chi_after[, -1])
+rownames(ages_chi_after_mat) <- ages_chi_after$`Maternal Age`
+ages_chi_after <- as.data.frame(ages_chi_after_mat)
+ 
+
+
+#######################
+        #After Race
+#######################
+
+ races_chi_after <- fairlabs_data_after %>%
+  mutate(maternal_race = case_when(
+  native_yn == 1 ~ "native_yn",
+  asian_yn == 1 ~ "asian_yn",
+  black_yn == 1 ~ "black_yn",
+  other_yn == 1 ~ "other_yn",
+  ni_yn == 1 ~ "ni_yn",
+  pi_yn == 1 ~ "pi_yn",
+  white_yn == 1 ~ "white_yn")) %>%
+  group_by(maternal_race) %>%
+  summarize(pct_tested_expected = round(sum(fairlabs_data_after$tested10 == 1) / 
+               length(fairlabs_data_after$encounter_id) * 100, 2), 
+            pct_tested_obs = round(sum(tested10 == 1) / n() * 100, 2),
+            pct_reported_expected = round(sum(fairlabs_data_after$reported10 == 1) / 
+              length(fairlabs_data_after$encounter_id)*100,2), 
+            pct_reported_obs = round(sum(reported10 == 1) / n() * 100, 2)) 
+# P value tested
+races_tested_after_table <- matrix(c(races_chi_after$pct_tested_obs, 
+                                     races_chi_after$pct_tested_expected), 
+                                   nrow = 2, byrow = TRUE)
+races_tested_after_chi <- chisq.test(races_tested_after_table)
+races_tested_after_chi_p <- races_tested_after_chi$p.value
+
+# P value reported
+races_reported_after_table <- matrix(c(races_chi_after$pct_reported_obs, 
+                                       races_chi_after$pct_reported_expected), 
+                                     nrow = 2, byrow = TRUE)
+races_reported_after_chi <- chisq.test(races_reported_after_table)
+races_reported_after_chi_p <- races_reported_after_chi$p.value
+
+#Clean table
+races_chi_after <- races_chi_after %>%
+  mutate(pct_tested_expected = paste(pct_tested_expected, "%"), 
+         pct_tested_obs = paste(pct_tested_obs, "%"),
+         pct_reported_expected = paste(pct_reported_expected, "%"),
+         pct_reported_obs = paste(pct_reported_obs, "%")) %>%
+  arrange(factor(maternal_race, levels = c("black_yn", "white_yn", "asian_yn", "pi_yn",
+                                   "native_yn1","other_yn", "ni_yn"))) %>%
+  mutate(maternal_race = ifelse(maternal_race == "asian_yn", "Asian", maternal_race)) %>% 
+  mutate(maternal_race = ifelse(maternal_race == "black_yn", "Black or African American", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "native_yn", "American Indian or Alaska Native", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "other_yn", "Multiracial/Other", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "pi_yn", "Other Pacific Islander", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "ni_yn", "Not Indicated", maternal_race)) %>%
+  mutate(maternal_race = ifelse(maternal_race == "white_yn", "White", maternal_race)) %>%
+  rename("Expected Rate of Testing" = pct_tested_expected, 
+         "Observed Rate of Testing" = pct_tested_obs, 
+         "Expected Rate of Reporting" = pct_reported_expected, 
+         "Observed Rate of Reporting" = pct_reported_obs, 
+         "Maternal Race" = maternal_race)
+
+ # Convert to matrix and set row names
+races_chi_after_mat <- as.matrix(races_chi_after[, -1])
+rownames(races_chi_after_mat) <- races_chi_after$`Maternal Race`
+races_chi_after <- as.data.frame(races_chi_after_mat)
+
+
+
+
+
+
+ 
+ 
+ 
+ 
+#change reported to % obs and % expected 
+
+#age_table_bef <- with(ages_chi_before, table(maternal_decade, c(x,y)))
+#age_table_bef
+#chisq.test(age_table_bef)
+
+```
+
+## Dashboard ERIN
+
+```{r}
+
+
+
+######################################
+# making a layout: https://shiny.posit.co/r/articles/build/layout-guide/
+# https://stackoverflow.com/questions/49656824/use-an-actionbutton-to-go-to-another-tab 
+# https://rstudio.github.io/shiny/reference/tabsetPanel.html
+#https://www.r-bloggers.com/2022/10/shiny-application-layouts-are-changing/ 
+#https://shiny.posit.co/py/layouts/ 
+#https://shiny.posit.co/r/articles/build/layout-guide/ 
+
+#E6ECF5 light grey blue 
+#616569 dark grey
+#F5F5F5 light grey
+#00AAEE cerulean
+#0073b7 nice navy
+#D3D3D3 darker grey
+
+ui <- page_fluid(
+  
+  tags$head(
+    tags$style(HTML("
+      body {background-color: #1A2954; /* Overall background color */}
+      .tab-content {background-color: white; /* Background color for tabPanels */}
+      .nav-tabs {background-color: #F5F5F5; /* Background color for tab titles */}
+      .nav-tabs > li > a {color: #1A2954;  /* Text color of nav-tabs */
+      font-weight: bold; /* Font weight of nav-tabs text */}
+    "))
+  ),
+  #tags$head(tags$style('body {color:navy;}')), #To change all body text
+  #tags$head(tags$style('h1 {color:red;}')), #To change all h1 text
+  
+  
+  br(),
+
+  
+
+  tags$head(tags$style(HTML(".main-card {background-color: #F5F5F5;}"))),
+  
+  
+  card(class = "main-card",
+       h1(style = "text-align: center; color: #1A2954; font-family: 'Arial Black';","Peripartum Urine Drug Screening Analytics"),
+       h6(style = "color: black; font-weight: bold;","In efforts to improve fairness of peripartum laboratory testing, Washington University labor and delivery implemented a policy that requires written indications for all urine drug screening (UDS) testing, and which prohibits ordering UDS for isolated marijuana use.", br(), "Browse the tabs below to investigate equity and fairness of peripartum urine drug screening testing before and after the intervention:"), 
+       div(style = "color: black;", "Time Series Analysis - monitors maternal drug testing and CPS reporting over time to ensure patients are tested at rates equivalent to their representation in population", br(), "Statistical Analysis - evaluates ordering bias between different ages and races with respect to internal testing outcomes", br(), "Indication Analysis - tracks the predictive value of testing across mothers of varying ages and races"),
+       
+       
+      #==============================================================
+      #                           Page 1
+      #==============================================================
+       
+  
+       
+  tabsetPanel(
+      tabPanel(h5("Time Series Analysis"),
+               layout_sidebar(
+                 sidebar = sidebar(
+                   "The graphs here depict testing data over time. The date of intervention is marked by the black vertical line", br(), br(),
+                   checkboxGroupInput(inputId = "checkGroup", 
+                                   label = h6("Select the demographics displayed in the graphs"), 
+                                   choices =
+                                     list("Overall" = 'Overall',
+                                          "White" = 'White',
+                                          "Asian" = 'Asian',
+                                          "Black or African American" = 
+                                            'Black or African American',
+                                          "American Indian or Alaska Native" =
+                                            'American Indian or Alaska Native',
+                                          "Multiracial/Other"= 'Multiracial/Other',
+                                          "Not Indicated" = 'Not Indicated',
+                                          "Other Pacific Islander" = 
+                                            'Other Pacific Islander',
+                                          "<20 years old" = '<20 years old',
+                                          "20-35 years old" = '20-35 years old',
+                                          ">35 years old" = '>35 years old'),
+                                   selected = c('Overall', 'White', 'Black or African American')), 
+                   br(),
+                   radioButtons(inputId = "radio_trendline", 
+                                label = h6("Data Visualization"),
+                           choices= c("Raw Data", "Raw Data and Trendline",
+                                      "Trendline", "Trendline with Confidence Intervals"),
+                           selected = "Raw Data"), 
+                   div(HTML("<em>95% confidence intervals not displayed when beyond bounds</em>"))
+                   ),
+                 
+                 layout_columns(
+                  card(h5("% of Mothers Tested for Drugs"),
+                       plotOutput(outputId = "tested_plot")),
+                  card(h5("% of Drug Tests Reported to CPS"),
+                       plotOutput("reported_plot")),
+                  col_widths = c(5,7)), 
+                layout_columns(
+                  card(h5("% of Drug Tests with Positive Results"), 
+                       plotOutput("positive_plot")), 
+                  card(h5("% of Positive Drug Tests Which Were Reported"), 
+                       plotOutput("reported_pos_plot")),
+                  col_widths = c(5,7)), 
+                layout_columns(
+                  card(h5("% of Drug Tests with Positive Results (excluding marijuana)"),
+                       plotOutput("positive_wo_mj_plot")), 
+                  card(h5("% of Positive Drug Tests (excluding marijuana) Which Were Reported"),
+                       plotOutput("reported_pos_wo_mj_plot")),
+                  col_widths = c(5,7)), 
+                layout_columns(
+                  card(h5("% of Drug Tests with Positive Results (illicit only)"),
+                       plotOutput(outputId = "positive_illicit_plot")),
+                  card(h5("% of Positive Drug Tests (illicit only) Which Were Reported"),
+                       plotOutput("reported_pos_illicit_plot")),
+                  col_widths = c(5,7))
+               )
+
+      ), 
+      
+
+      #==============================================================
+      #                           Page 2
+      #==============================================================
+  
+      tabPanel(h5("Statistical Analysis"), br(),
+               h4(style = "padding-left: 20px;","Part 1: Correlation Analysis"), br(),
+               h5(style = "padding-left: 20px;", "This table was constructed using logistic regression to identify statistically significant relationships between the predictor variables (rows) and each outcome variable (column)."), 
+              div(style = "padding-left: 20px;","Any bias reflected in the 'Tested' column should be compared to the outcomes in the following columns (positivity and reporting). If testing does not reflect the trends seen in the outcomes, testing may be biased.", br(), "For example, if being Black or African American has a significant contribution to the probability of being tested, but is not significantly contrinuting to the probability of testing positive, the Black or African American demographic may be over-tested. Further, if a younger age significantly contributes to the probability of being tested, but older ages significantly contribute to higher positivity rates, young mothers may be over-tested."), 
+              div(style = "padding-left: 20px;", HTML("<em>Values which are not statistically significant are hidden (p > 0.05). Groups with <20 participants were excluded from 'Tested' correlation. Groups with <10 patients tested were excluded in all following columns. Statistically significant contributors have weights with confidence intervals that do not cross zero.</em>")), br(), br(),
+               layout_sidebar(
+                 sidebar = sidebar(
+                   radioButtons(inputId = "radio_coef", 
+                                label = h6("Select Analysis:"),
+                           choices= c("Before Intervention", "After Intervention"),
+                           selected = "Before Intervention"), 
+                   br(),
+                   h6("Heat Map:"),
+                   div(style = "background-color: #FFB6C1;", "Positive Correlations"),
+                   div(style = "background-color: #87CEFA;", "Negative Correlations ")),
+                 layout_columns(
+                   div(dataTableOutput("c_table"), style = "font-size:90%"),
+                   plotOutput(outputId = "pie_chart"), 
+                   col_widths = c(8,4))
+                 ), br(),
+              h4(style = "padding-left: 20px;","Part 2: Chi Square Analysis"), br(),
+              h5(style = "padding-left: 20px;", "This table was constructed using chi square test to identify statistically significant relationships between expected and observed rates of testing and reporting, performed individually for maternal age and maternal race."),
+              div(style = "padding-left: 20px;","The expected testing and reporting rates were determined by calculating the overall rate of testing and reporting regardless of demographic. The observed testing and reporting rates were determined by calculating the rate of testing and reporting within the given demographic. These tables are reactive to the 'Before' and 'After' buttons above."), br(), br(),
+              layout_columns(
+                card(h5("Maternal Age"), div(dataTableOutput("age_chi_table"), style = "font-size:90%"), verbatimTextOutput("age_chi_text")),
+                card(h5("Maternal Race"),div(dataTableOutput("race_chi_table"), style = "font-size:90%"), verbatimTextOutput("race_chi_text")),
+                col_widths = c(6,6)
+                )
+              
+              ), #end of panel
+      
+
+      #==============================================================
+      #                           Page 3
+      #=============================================================
+
+      tabPanel(h5("Indication Analysis"),
+               layout_columns(
+                 card(h5("Indications by Maternal Race"), 
+                    plotOutput(outputId = "indication_chart")),
+                 card(h5("Indications by Maternal Age"),
+                      plotOutput(outputId = "boxplot"))),
+               br(),
+               layout_columns(
+                 card(h5("Individual Indications Breakdown"), 
+                      selectInput(inputId = "dropdown", "Select Indication:", 
+                                  choices = c("Does Not Apply" = "Does not apply because the patient is not on Labor and Delivery", 
+                                              "Opioids Perscribed" = "History of opioids prescribed during pregnancy", 
+                                              "No Indication" = "No indication provided", "No Prenatal Care" = "No prenatal care", 
+                                              "Other" = "Other (Free Text)",  
+                                              "Substance Use" = "Substance use during pregnancy, excluding marijuana", 
+                                              "Change in Mental Status" = "Sudden change in mental status", 
+                                              "Abruption of Placenta" = "Unexplained abruption of placenta", 
+                                              "Hypertensive Crisis" = "Unexplained hypertensive crisis", 
+                                              "Fetal Demise or Spontaneous Abortion" = "Unexplained late fetal demise or repeated spontaneous abortions", "Unexplained Seizure" = "Unexplained seizure")),
+                      dataTableOutput("ind")), 
+                 card(h5("Equalized Odds"), 
+                      "We expect those with indications 'Substance use during pregnancy, excluding marijuana' and 'History of opioids perscribed during pregnancy' to test positive for drugs. UDS is ordered for the other indications to rule out drug use as a cause for unexplained outcomes, so positivity is not expected (if it was, regardless of birth outcomes, substance use would've been indicated). We examine the sensitivity and specificity of these two indications leading to a positive UDS.", 
+                      div(dataTableOutput("sens_spec"), style ="padding-left: 20px; padding-right: 20px"), 
+                      verbatimTextOutput("ss_text")) 
+                 ), 
+               card(h5("Next Steps"), "- In order to determine if UDS positivity is meaningful, we need mothers' medications and perscriptions to eliminate false positives.", br(), "- We also need a report of mothers who admit to drug use who do not undergo UDS, which will affect our population statistics", br(), "- We need mothers' zip code to fully investigate sociocultural influences on testing rates.")
+               
+               )
+      
+      
+      
+      ) #tabsetpanel layout
+  ) #main card end
+
+) #pagefillable
+
+
+  
+
+###################################################################################
+###################################################################################
+
+
+
+
+
+
+
+
+
+# https://forum.posit.co/t/create-a-shiny-app-to-filter-rows-and-columns-simultaneously-from-a-genetic-distance-matrix/156605/2
+#need help with reactivity 
+
+
+server <- function(input, output) {
+
+      #==============================================================
+      #                           Page 1
+      #==============================================================
+  
+  output$tested_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_pts_tested, color = Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% Tested") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.position = "none") +
+      ylim(0, max(month_count_combined_filtered$pct_pts_tested, na.rm = TRUE)) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    
+    })
+
+  output$positive_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_tests_pos, color = Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% Positive") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.position = "none") +
+      ylim(0, 100) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    })
+  
+  output$positive_wo_mj_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_tests_pos_wo_mj, color = Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% Positive (excluding MJ)") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.position = "none") +
+      ylim(0, 100) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    })
+  
+   output$positive_illicit_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_tests_pos_illicit, color = Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% Positive (Illicit)") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.position = "none") +
+      ylim(0, 100) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    })
+    
+  output$reported_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_tests_rep, color = Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% Reported") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.title = element_text(size = 17),
+            legend.text = element_text(size = 17)) +
+      ylim(0, 100) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    })
+  
+  output$reported_pos_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_tests_rep_pos, color = Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% of Positive Reported") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.title = element_text(size = 17),
+            legend.text = element_text(size = 17)) +
+      ylim(0, 100) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    })
+  
+  output$reported_pos_wo_mj_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_tests_rep_pos_wo_mj, color = Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% of Pos (excluding MJ) Reported") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.title = element_text(size = 17),
+            legend.text = element_text(size = 17)) +
+      ylim(0, 100) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    })
+  
+  output$reported_pos_illicit_plot <- renderPlot({
+    month_count_combined_filtered <- month_count_combined %>% 
+      filter(Demographic %in% input$checkGroup)
+    ggplot(data = month_count_combined_filtered, 
+           aes(x=delivery_month2, y=pct_tests_rep_pos_illicit, color=Demographic)) +
+      geom_vline(aes(xintercept = 0), color="black") +
+      labs(x = "Months Since Intervention", 
+           y = "% of Pos (Illicit) Reported") + 
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 17),
+            axis.title.x = element_text(size = 17),
+            axis.text.y = element_text(size = 17),
+            axis.title.y = element_text(size = 17),
+            legend.title = element_text(size = 17),
+            legend.text = element_text(size = 17)) +
+      ylim(0, 100) +
+      {if(input$radio_trendline == "Raw Data" | input$radio_trendline == 
+          "Raw Data and Trendline")geom_line(stat = "identity", size = 1)} +
+      {if(input$radio_trendline == "Raw Data and Trendline")geom_smooth(se = FALSE)} +
+      {if(input$radio_trendline == "Trendline")geom_smooth(se = FALSE)} + 
+      {if(input$radio_trendline == "Trendline with Confidence Intervals")geom_smooth(se=TRUE)}
+    })
+
+  
+      #==============================================================
+      #                           Page 2
+      #==============================================================
+
+  output$c_table <- renderDT({
+    if (input$radio_coef == "Before Intervention") {
+      datatable(coef_table_before, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE, info = FALSE,
+                             columnDefs = list(list(width = '100px', 
+                                                    targets = "_all"))),
+              class = list(stripe = FALSE)) %>%
+        formatStyle(names(coef_table_before), backgroundColor = 
+                      styleInterval(c(0),c('lightskyblue','lightpink')), 
+                    border = '1px solid black')
+      
+      #how to set the heatmap colors? different levels of red/blue?
+      #https://rstudio.github.io/DT/010-style.html 
+                    
+    } else if (input$radio_coef == "After Intervention") {
+      datatable(coef_table_after, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE,info = FALSE,
+                             columnDefs = list(list(width = '100px', 
+                                                    targets = "_all"))),
+              class = list(stripe = FALSE)) %>%
+        formatStyle(names(coef_table_before), backgroundColor = 
+                      styleInterval(c(0),c('lightskyblue','lightpink')),
+                    border = '1px solid black')
+    }
+  })
+  
+  output$pie_chart <- renderPlot({
+    if (input$radio_coef == "Before Intervention") {
+      create_pie_chart(fairlabs_data_before, tested)
+    } else if (input$radio_coef == "After Intervention") {
+      create_pie_chart(fairlabs_data_after, tested)
+    }
+  })
+  
+    output$age_chi_table <- renderDT({
+    if (input$radio_coef == "Before Intervention") {
+      datatable(ages_chi_before, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE, info = FALSE,
+                             columnDefs = list(list(width = '100px', 
+                                                    targets = "_all"))),
+              class = list(stripe = FALSE)) %>%
+        formatStyle(names(ages_chi_before),
+                    border = '1px solid black')
+                    
+    } else if (input$radio_coef == "After Intervention") {
+      datatable(ages_chi_after, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE,info = FALSE,
+                             columnDefs = list(list(width = '100px', 
+                                                    targets = "_all"))),
+              class = list(stripe = FALSE)) %>%
+        formatStyle(names(ages_chi_before),
+                    border = '1px solid black')
+
+    }
+  })
+  
+    output$race_chi_table <- renderDT({
+    if (input$radio_coef == "Before Intervention") {
+      datatable(races_chi_before, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE, info = FALSE,
+                             columnDefs = list(list(width = '100px', 
+                                                    targets = "_all"))),
+              class = list(stripe = FALSE)) %>%
+        formatStyle(names(races_chi_before),
+                    border = '1px solid black')
+                    
+    } else if (input$radio_coef == "After Intervention") {
+      datatable(races_chi_after, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE,info = FALSE,
+                             columnDefs = list(list(width = '100px', 
+                                                    targets = "_all"))),
+              class = list(stripe = FALSE)) %>%
+        formatStyle(names(races_chi_before),
+                    border = '1px solid black')
+
+    }
+  })
+    
+    
+    output$age_chi_text <- renderText({
+      if (input$radio_coef == "Before Intervention") {
+        paste("Tested Chi Square P-Value: ", ifelse(ages_tested_before_chi_p < 0.01, "<0.01",round(ages_tested_before_chi_p,3)),
+              "\nReported Chi Square P-Value: ", ifelse(ages_reported_before_chi_p < 0.01, "<0.01",round(ages_reported_before_chi_p,3)))
+      }
+      else {
+        paste("Tested Chi Square P-Value: ", ifelse(ages_tested_after_chi_p < 0.01, "<0.01",round(ages_tested_after_chi_p,3)),
+              "\nReported Chi Square P-Value: ", ifelse(ages_reported_after_chi_p < 0.01, "<0.01",round(ages_reported_after_chi_p,3)))
+      }
+    
+  })
+    
+    output$race_chi_text <- renderText({
+      if (input$radio_coef == "Before Intervention") {
+        paste("Tested Chi Square P-Value: ", ifelse(races_tested_before_chi_p < 0.01, "<0.01",round(races_tested_before_chi_p,3)),
+              "\nReported Chi Square P-Value: ", ifelse(races_reported_before_chi_p < 0.01, "<0.01",round(races_reported_before_chi_p,3)))
+      }
+      else {
+        paste("Tested Chi Square P-Value: ", ifelse(races_tested_after_chi_p < 0.01, "<0.01",round(races_tested_after_chi_p,3)),
+              "\nReported Chi Square P-Value: ", ifelse(races_reported_after_chi_p < 0.01, "<0.01",round(races_reported_after_chi_p,3)))
+      }
+  })
+  
+
+      #==============================================================
+      #                           Page 3
+      #==============================================================
+  
+  output$indication_chart <- renderPlot({
+    gghistogram(fairlabs_data_tested_after, x = "order_indication", stat = "count", position = "stack", color = "maternal_race", fill = "maternal_race", xlab = "Order Indication", ylab = "Number of Patients") %>% ggpar(x.text.angle = 60, legend = c(0.8,0.7), font.x = 17, font.tickslab = 15, font.y = 17, font.legend = 17, legend.title = "Maternal Race") + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
+  })
+  
+  output$boxplot <- renderPlot({
+    order_levels <- levels(fairlabs_data_tested_after$order_indication)
+    order_levels <- c(order_levels, "Overall")
+    order_levels
+    
+    boxplot_data <- fairlabs_data_tested_after %>%
+      mutate(order_indication = "Overall") %>%
+      rbind(fairlabs_data_tested_after)
+    
+    boxplot_data$order_indication <- factor(boxplot_data$order_indication, levels = order_levels)
+    
+    ggplot(data = boxplot_data, aes(x=order_indication, y=maternal_age, fill = order_indication)) + 
+      geom_boxplot() + 
+      #geom_dotplot(binaxis='y', stackdir='center', dotsize=1) +
+      labs(x = "Order Indication", 
+           y = "Maternal Age") +
+      ylim(0, 50) +
+      theme_minimal() +
+      theme(legend.position="none", 
+            axis.text.x = element_text(angle = 60, size = 15, hjust=1),
+            axis.title.x = element_text(size = 17),
+            axis.title.y = element_text(size = 17)) +
+       scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
+  })
+  
+    #output$ind <- renderDT ({
+    #datatable(substance_use, selection = 'none', 
+              #options = list(paging = FALSE, searching = FALSE, 
+              #               ordering=FALSE, info = FALSE, 
+              #columnDefs = list(list(width = '100px', 
+              #                                      targets = "_all"))))
+ # })
+    
+    
+    
+    
+  output$ind <- renderDT ({
+    ind_filtered <- fairlabs_data_tested_after %>%
+      filter(order_indication == input$dropdown) 
+    
+      #add total row here
+    ind_filtered <- rbind(ind_filtered, ind_filtered %>% mutate(maternal_race = " Overall")) %>%
+      group_by(maternal_race)
+    
+    ind_filtered <- ind_filtered %>%
+      summarize(Number = n(), 
+                Positive = paste0(sum(tested_pos == 1, na.rm = TRUE), " (", round(sum(tested_pos == 1, na.rm = TRUE)/Number * 100, 0), "%)"), 
+                pos_wo_mj = paste0(sum(tested_pos_wo_mj == 1, na.rm = TRUE), " (", round(sum(tested_pos_wo_mj == 1, na.rm = TRUE)/Number * 100, 0), "%)"), 
+                pos_illicit = paste0(sum(tested_pos_illicit == 1, na.rm = TRUE), " (", round(sum(tested_pos_illicit == 1, na.rm = TRUE)/Number * 100, 0), "%)"), 
+                PPV = paste(round(sum(tested_pos_wo_mj == 1, na.rm = TRUE)/Number,2))) %>%
+      rename("Pts with Selected indication" = Number, 
+             "Pts With Positive UDS" = Positive, 
+             "Pts With Positive UDS (excluding marijuana)" = pos_wo_mj, 
+             "Pts With Positive UDS (illicit)" = pos_illicit,
+             "Positive Predictive Value of Indiciation for Non-Marijuana Positivity" = PPV)
+      
+      # Convert to matrix and set row names
+    ind_filtered_mat <- as.matrix(ind_filtered[, -1])
+    rownames(ind_filtered_mat) <- ind_filtered$maternal_race
+    
+    # Convert back to data frame
+    ind_filtered <- as.data.frame(ind_filtered_mat)
+      
+      
+    datatable(ind_filtered, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE, info = FALSE, 
+              columnDefs = list(list(width = '50px', 
+                                                    targets = "_all"))))
+  })
+  
+  output$sens_spec <- renderDT ({
+    
+    datatable(ss_table, selection = 'none', 
+              options = list(paging = FALSE, searching = FALSE, 
+                             ordering=FALSE, info = FALSE, 
+              columnDefs = list(list(width = '10px',targets = "_all"))),
+              class = list(stripe = FALSE)) %>%
+      formatStyle(names(ss_table), border = '1px solid black')
+  })
+  
+  output$ss_text <- renderText({
+    paste(
+      "Sensitivity: ", round(sensitivity,3), "\nSpecificity: ", round(specificity,3)
+    )
+  })
+  
+  
+  
+
+}
+
+
+# Run the application
+shinyApp(ui = ui, server = server)
+```
+
+## 
+
+```{r}
+
+
+```
